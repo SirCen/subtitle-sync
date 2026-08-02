@@ -16,7 +16,7 @@ Blender open movie **"Tears of Steel"** (project "Mango", 2012).
 
 ## License
 
-**Creative Commons Attribution 3.0 (CC-BY 3.0)** — the film, its assets, and the
+**Creative Commons Attribution 3.0 (CC-BY 3.0)** - the film, its assets, and the
 subtitle files are released by the Blender Foundation under CC-BY.
 
 Required attribution:
@@ -29,7 +29,7 @@ standalone OST files, not to the film clip used here.)
 
 ## What was produced
 
-- `sample.mp4` — a 30-second clip trimmed from the full film starting at t=22s
+- `sample.mp4` - a 30-second clip trimmed from the full film starting at t=22s
   (original timeline 00:00:22 → 00:00:52). This window contains the opening
   Thom/Celia dialogue, which is clear spoken English.
   - Container/codecs: MP4, H.264 video (640x268, 24 fps) + AAC audio
@@ -39,7 +39,7 @@ standalone OST files, not to the film clip used here.)
     (ffmpeg `volumedetect`). Full decode passed with no errors
     (`ffmpeg -v error -i sample.mp4 -f null -`).
 
-- `sample.srt` — **derived from the official CC-BY English SRT** (cues 1–10),
+- `sample.srt` - **derived from the official CC-BY English SRT** (cues 1–10),
   with every timestamp shifted by **-22 s** to line up with the trimmed clip's
   new zero point. Because it is a straight offset of the official subtitles,
   the alignment is essentially accurate (not merely rough). Cue 10's end was
@@ -58,7 +58,7 @@ curl -s -o TOS-en.srt \
 
 # 2. Trim + re-encode a small 30s clip directly from the HTTP source.
 #    ffmpeg HTTP byte-range seeking is used, so the full 372 MB file is NOT
-#    downloaded — only the bytes needed for the 22s..52s window.
+#    downloaded - only the bytes needed for the 22s..52s window.
 ffmpeg -y -ss 22 \
   -i "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov" \
   -t 30 -vf "scale=640:-2" \

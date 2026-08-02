@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-sync_srt.py — Auto-detect the correct offset/framerate for an SRT file
+sync_srt.py - Auto-detect the correct offset/framerate for an SRT file
 by comparing it against the actual speech (voice activity) in a video,
 then write out a corrected SRT.
 
 HOW IT WORKS
 ------------
-SRT timestamps don't store a framerate — they're just wall-clock times.
+SRT timestamps don't store a framerate - they're just wall-clock times.
 So "wrong framerate" subtitles actually just drift more and more out of
 sync the further into the video you go. This script:
 
@@ -303,7 +303,7 @@ def main():
 
     fps = get_video_fps(args.video)
     if fps:
-        print(f"Video reports framerate: {fps:.3f} fps (informational only — not used directly)")
+        print(f"Video reports framerate: {fps:.3f} fps (informational only - not used directly)")
 
     print("Extracting audio and running voice activity detection (this can take a bit)...")
     with tempfile.TemporaryDirectory() as td:
@@ -335,7 +335,7 @@ def main():
         print("  WARNING: confidence score is very low. The audio may have little dialogue,")
         print("  the SRT may not match this video at all, or VAD settings need adjusting.")
     elif runner_up_score > 0 and (best_score - runner_up_score) / best_score < 0.15:
-        print("  NOTE: the top two candidates scored similarly — worth double-checking the result.")
+        print("  NOTE: the top two candidates scored similarly - worth double-checking the result.")
 
     if args.dry_run:
         return

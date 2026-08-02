@@ -31,7 +31,7 @@ import type { SpeechSignal } from "./types";
  * reference (note the `+ 1` on the end index, which makes adjacent frames share
  * a boundary step so contiguous speech frames yield contiguous 1s).
  *
- * PURE — no WASM, no I/O. This is the unit-tested part.
+ * PURE - no WASM, no I/O. This is the unit-tested part.
  */
 export function assembleSpeechSignal(
   frameIsSpeech: boolean[],
@@ -66,7 +66,7 @@ export function assembleSpeechSignal(
 // URL at runtime. For now we fetch the single-threaded UMD core from a CDN via
 // toBlobURL (bypasses CORS). TASK #7 will replace CDN_CORE_BASE_URL with an
 // app-served path (e.g. /ffmpeg-core/...) so the assets ship from our own
-// origin on Vercel — see extractPcm16's load() call.
+// origin on Vercel - see extractPcm16's load() call.
 const FFMPEG_CORE_VERSION = "0.12.10";
 const CDN_CORE_BASE_URL = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/umd`;
 

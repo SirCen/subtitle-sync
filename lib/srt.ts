@@ -4,7 +4,7 @@
 
 import type { SrtBlock } from "./types";
 
-// Matches HH:MM:SS,mmm or HH:MM:SS.mmm — comma or dot millisecond separator.
+// Matches HH:MM:SS,mmm or HH:MM:SS.mmm - comma or dot millisecond separator.
 const SRT_TIME_RE = /(\d{2}):(\d{2}):(\d{2})[,.](\d{3})/;
 
 // A start --> end timestamp pair on a cue line.
@@ -37,7 +37,7 @@ export function secondsToSrtTime(sec: number): string {
   sec -= m * 60;
   let s = Math.floor(sec);
   let ms = Math.round((sec - s) * 1000);
-  // Rounding can push ms to 1000 — cascade the carry up through s/m/h.
+  // Rounding can push ms to 1000 - cascade the carry up through s/m/h.
   if (ms === 1000) {
     ms = 0;
     s += 1;

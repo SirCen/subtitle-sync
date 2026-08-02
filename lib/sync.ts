@@ -202,7 +202,7 @@ const LOW_CONFIDENCE_WARNING =
   "may not match this video at all, or VAD settings need adjusting.";
 
 const AMBIGUOUS_TOP2_NOTE =
-  "The top two candidates scored similarly — worth double-checking the result.";
+  "The top two candidates scored similarly - worth double-checking the result.";
 
 export function analyze(
   speech: SpeechSignal,

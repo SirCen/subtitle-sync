@@ -7,8 +7,8 @@ result the TypeScript port must match, and writes it to
 test/fixtures/expected.json.
 
 Only numpy + scipy are required (both install as wheels, no C compiler). The
-reference module imports webrtcvad at top level, but we never run VAD here — the
-speech signal is loaded from the committed test/fixtures/speech_signal.json — so
+reference module imports webrtcvad at top level, but we never run VAD here - the
+speech signal is loaded from the committed test/fixtures/speech_signal.json - so
 we inject a stub `webrtcvad` module before importing sync_srt.
 
 Usage:  pip install numpy scipy   then:   python test/oracle/oracle.py
