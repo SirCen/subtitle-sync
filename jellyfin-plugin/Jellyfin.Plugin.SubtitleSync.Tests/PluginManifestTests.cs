@@ -15,6 +15,9 @@ public class PluginManifestTests
     private const string ConfigPageResource =
         "Jellyfin.Plugin.SubtitleSync.Configuration.configPage.html";
 
+    private const string BundleResource =
+        "Jellyfin.Plugin.SubtitleSync.Web.subtitleSync.js";
+
     /// <summary>
     /// The GUID is the shared key between the server, the repository manifest and
     /// every installed copy. Changing it orphans existing installs.
@@ -49,10 +52,49 @@ public class PluginManifestTests
             ConfigPageResource,
             typeof(Plugin).Assembly.GetManifestResourceNames());
 
-        var pages = UninitializedPlugin().GetPages().ToList();
+        var page = Assert.Single(
+            UninitializedPlugin().GetPages(),
+            p => p.Name == "Subtitle Sync");
 
-        Assert.Single(pages);
-        Assert.Equal(ConfigPageResource, pages[0].EmbeddedResourcePath);
+        Assert.Equal(ConfigPageResource, page.EmbeddedResourcePath);
+    }
+
+    /// <summary>
+    /// The browser bundle of <c>lib/</c> is served through the same
+    /// <c>GetPages</c> mechanism as the config page, under a <c>.js</c> name so
+    /// the server infers a JavaScript content type. If the csproj's LogicalName
+    /// and this path ever disagree the page 404s at runtime and nowhere else.
+    /// </summary>
+    [Fact]
+    public void WebBundleIsEmbeddedUnderTheNameGetPagesAdvertises()
+    {
+        Assert.Contains(
+            BundleResource,
+            typeof(Plugin).Assembly.GetManifestResourceNames());
+
+        var page = Assert.Single(
+            UninitializedPlugin().GetPages(),
+            p => p.Name == Plugin.BundlePageName);
+
+        Assert.Equal(BundleResource, page.EmbeddedResourcePath);
+        Assert.EndsWith(".js", page.Name, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A bundle that failed to build but still embedded would be a zero-byte
+    /// resource and a page that loads but does nothing. It carries a minified
+    /// copy of lib/ plus ~27 KB of base64 libfvad, so it cannot be small.
+    /// </summary>
+    [Fact]
+    public void WebBundleIsNotTrivial()
+    {
+        using var stream = typeof(Plugin).Assembly
+            .GetManifestResourceStream(BundleResource);
+
+        Assert.NotNull(stream);
+        Assert.True(
+            stream!.Length > 40_000,
+            $"embedded bundle is only {stream.Length} bytes");
     }
 
     /// <summary>

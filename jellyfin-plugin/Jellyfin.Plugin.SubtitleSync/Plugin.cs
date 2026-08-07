@@ -59,17 +59,39 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// </summary>
     public override string Description => "Re-time subtitle tracks against the audio they belong to.";
 
+    /// <summary>
+    /// Gets the page name under which the browser bundle of <c>lib/</c> is served.
+    /// </summary>
+    /// <remarks>
+    /// Registered pages are served from <c>/web/ConfigurationPage?name={Name}</c>,
+    /// with the content type derived from the extension of
+    /// <see cref="PluginPageInfo.EmbeddedResourcePath"/> - hence the <c>.js</c>
+    /// suffix on both. This is the same trick the OpenSubtitles plugin uses to
+    /// ship a script alongside its configuration page, and it is the only way to
+    /// serve a static asset from a plugin in 10.11 without adding a controller.
+    /// </remarks>
+    public const string BundlePageName = "subtitleSync.js";
+
     /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages()
     {
-        // EmbeddedResourcePath is the default MSBuild manifest resource name:
-        // <RootNamespace>.<folder path with dots>.<filename>.
+        var prefix = GetType().Namespace;
+
+        // EmbeddedResourcePath is the manifest resource name. For configPage.html
+        // that is the MSBuild default (<RootNamespace>.<folder>.<file>); for the
+        // bundle it is the LogicalName set in the csproj, because the file is
+        // generated outside the project directory.
         return
         [
             new PluginPageInfo
             {
                 Name = Name,
-                EmbeddedResourcePath = GetType().Namespace + ".Configuration.configPage.html",
+                EmbeddedResourcePath = prefix + ".Configuration.configPage.html",
+            },
+            new PluginPageInfo
+            {
+                Name = BundlePageName,
+                EmbeddedResourcePath = prefix + ".Web.subtitleSync.js",
             }
         ];
     }
