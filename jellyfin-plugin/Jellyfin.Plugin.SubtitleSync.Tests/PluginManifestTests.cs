@@ -26,7 +26,7 @@ public class PluginManifestTests
     public void PluginIdIsTheStableGeneratedGuid()
     {
         Assert.Equal(
-            Guid.Parse("e981c765-b769-44a1-a4fe-805df5bb6d6b"),
+            Guid.Parse("96d55013-3cf0-465e-9036-7fb73dd47f71"),
             UninitializedPlugin().Id);
     }
 

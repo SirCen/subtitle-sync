@@ -26,7 +26,7 @@ concurrency:
 env:
   PLUGIN_CSPROJ: jellyfin-plugin/Jellyfin.Plugin.SubtitleSync/Jellyfin.Plugin.SubtitleSync.csproj
   PLUGIN_ASSEMBLY: Jellyfin.Plugin.SubtitleSync.dll
-  PLUGIN_GUID: e981c765-b769-44a1-a4fe-805df5bb6d6b
+  PLUGIN_GUID: 96d55013-3cf0-465e-9036-7fb73dd47f71
   PLUGIN_NAME: Subtitle Sync
   # Minimum server version, not an exact match: InstallationManager filters with
   # `Version.Parse(x.TargetAbi) <= appVer` and applies no upper bound. One entry

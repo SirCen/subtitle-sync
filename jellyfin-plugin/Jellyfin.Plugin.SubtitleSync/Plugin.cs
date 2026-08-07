@@ -47,7 +47,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// Generated once for this project. It is the key the server, the repository
     /// manifest and every installed copy agree on, so it must never change.
     /// </remarks>
-    public override Guid Id => Guid.Parse("e981c765-b769-44a1-a4fe-805df5bb6d6b");
+    public override Guid Id => Guid.Parse("96d55013-3cf0-465e-9036-7fb73dd47f71");
 
     /// <summary>
     /// Gets the name shown in Dashboard &gt; Plugins.

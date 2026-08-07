@@ -119,7 +119,7 @@ install directory and is wiped on plugin update. The signal cache belongs under
 - **Do not use `jellyfin/jellyfin-plugin-template`.** Its `master` is pinned to
   `Jellyfin.Controller` 10.9.11 and `unstable` has moved on to `net10.0` / 12.x.
   Bookshelf and OpenSubtitles are the right structural references.
-- The plugin GUID `e981c765-b769-44a1-a4fe-805df5bb6d6b` is the shared key
+- The plugin GUID `96d55013-3cf0-465e-9036-7fb73dd47f71` is the shared key
   between the server, the repository manifest and every installed copy. Changing
   it orphans existing installs. `PluginManifestTests` guards it.
 - `EmbeddedResourcePath` in `GetPages()` is a plain string holding an MSBuild

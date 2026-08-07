@@ -120,6 +120,22 @@ docker compose -f jellyfin-plugin/docker/docker-compose.yml restart jellyfin
 Jellyfin only scans plugins at startup, so the restart is required. Confirm with
 `npm run jf:logs` or by checking `GET /Plugins`.
 
+> **Restaging can silently keep the old build.** On first start Jellyfin
+> *migrates* loose DLLs out of `/config/plugins/SubtitleSync/` into a versioned
+> directory, `/config/plugins/Subtitle Sync_1.0.0.0/`, and from then on it loads
+> from there. Copying a new DLL into the bind mount therefore has no effect: the
+> server keeps running the migrated copy, the log still says the plugin loaded,
+> and you debug a build that is not the one you just made. Delete the versioned
+> directory before restarting:
+>
+> ```bash
+> docker exec subtitle-sync-jellyfin sh -c 'rm -rf "/config/plugins/Subtitle Sync_"*'
+> ```
+>
+> If the version number has not changed, checking the log line is not enough to
+> tell the two builds apart. `window.SubtitleSync.BUILD` in the browser carries
+> an ISO build stamp, which is the reliable way to confirm the bundle is fresh.
+
 ## The smoke tests
 
 Specs live in `jellyfin-plugin/e2e/`. Run with `npm run jf:e2e`.
