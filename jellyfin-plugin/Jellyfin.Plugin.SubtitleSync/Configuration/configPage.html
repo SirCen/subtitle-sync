@@ -41,8 +41,9 @@
                 <span>Cache analysed speech signals on the server</span>
               </label>
               <div class="fieldDescription checkboxFieldDescription">
-                Lets a repeat sync of the same file skip the audio decode. Not
-                implemented yet (issue #9).
+                Lets a repeat sync of the same file skip the audio decode. A miss
+                costs roughly 115 MB of audio per hour of runtime; the signal it
+                produces is about 45 KB per hour.
               </div>
             </div>
 
@@ -66,12 +67,98 @@
               </button>
             </div>
           </form>
+
+          <!--
+            Outside the form on purpose. Clearing is an immediate side effect on
+            the server, not a setting, so it must not be reachable by pressing
+            Enter in the number field above.
+          -->
+          <div class="verticalSection">
+            <h3>Cached speech signals</h3>
+            <div id="signalCacheReadout" class="fieldDescription">Loading...</div>
+            <div id="signalCacheDirectory" class="fieldDescription"></div>
+            <div>
+              <button
+                id="clearSignalCache"
+                is="emby-button"
+                type="button"
+                class="raised block emby-button"
+              >
+                <span>Clear cache</span>
+              </button>
+            </div>
+            <div class="fieldDescription">
+              Everything cleared here has to be re-analysed by the next browser
+              that syncs the file, which means downloading its audio again.
+            </div>
+          </div>
         </div>
       </div>
 
       <script type="text/javascript">
         (function () {
           var pluginId = 'e981c765-b769-44a1-a4fe-805df5bb6d6b';
+
+          function formatBytes(bytes) {
+            if (bytes < 1024) {
+              return bytes + ' B';
+            }
+
+            var units = ['KB', 'MB', 'GB'];
+            var value = bytes / 1024;
+            var unit = 0;
+            while (value >= 1024 && unit < units.length - 1) {
+              value /= 1024;
+              unit++;
+            }
+
+            return value.toFixed(1) + ' ' + units[unit];
+          }
+
+          function renderCacheStats(page, stats) {
+            var entries = stats.EntryCount === 1 ? '1 signal' : stats.EntryCount + ' signals';
+            var limit =
+              stats.SizeLimitBytes > 0
+                ? ' of a ' + formatBytes(stats.SizeLimitBytes) + ' limit'
+                : ' (no limit set)';
+
+            page.querySelector('#signalCacheReadout').textContent =
+              entries + ', using ' + formatBytes(stats.TotalBytes) + limit + '.';
+            page.querySelector('#signalCacheDirectory').textContent = stats.Directory;
+          }
+
+          function loadCacheStats(page) {
+            return ApiClient.getJSON(ApiClient.getUrl('SubtitleSync/Cache/Stats')).then(
+              function (stats) {
+                renderCacheStats(page, stats);
+              },
+              function () {
+                page.querySelector('#signalCacheReadout').textContent =
+                  'The cache could not be read.';
+              }
+            );
+          }
+
+          function clearCache(page) {
+            Dashboard.showLoadingMsg();
+            // Clear returns the stats it left behind, so the readout refreshes
+            // from the same response rather than from a second round trip that
+            // could disagree with it.
+            ApiClient.ajax({
+              type: 'POST',
+              url: ApiClient.getUrl('SubtitleSync/Cache/Clear'),
+              dataType: 'json',
+            }).then(
+              function (stats) {
+                renderCacheStats(page, stats);
+                Dashboard.hideLoadingMsg();
+              },
+              function () {
+                Dashboard.hideLoadingMsg();
+                Dashboard.alert('The cache could not be cleared.');
+              }
+            );
+          }
 
           function load(page) {
             Dashboard.showLoadingMsg();
@@ -82,6 +169,8 @@
                 config.SignalCacheSizeLimitMb;
               Dashboard.hideLoadingMsg();
             });
+
+            loadCacheStats(page);
           }
 
           function save(page) {
@@ -94,6 +183,9 @@
 
               ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
                 Dashboard.processPluginConfigurationUpdateResult(result);
+                // A lowered limit is only applied on the next write, so the
+                // readout is refreshed rather than assumed unchanged.
+                loadCacheStats(page);
               });
             });
           }
@@ -102,6 +194,12 @@
             .querySelector('#subtitleSyncConfigPage')
             .addEventListener('pageshow', function () {
               load(this);
+            });
+
+          document
+            .querySelector('#clearSignalCache')
+            .addEventListener('click', function () {
+              clearCache(document.querySelector('#subtitleSyncConfigPage'));
             });
 
           document

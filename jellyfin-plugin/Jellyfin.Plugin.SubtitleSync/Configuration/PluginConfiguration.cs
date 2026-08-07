@@ -29,8 +29,12 @@ public class PluginConfiguration : BasePluginConfiguration
     /// on the server so a re-sync of the same file skips the audio decode.
     /// </summary>
     /// <remarks>
-    /// Placeholder for issue #9, which owns the cache implementation. Nothing
-    /// reads this yet.
+    /// Defaults to <see langword="true"/>. A cache miss costs the browser
+    /// roughly 115 MB of raw PCM per hour of runtime; the signal it produces is
+    /// about 45 KB per hour. The sync page consults this before it asks the
+    /// cache anything: the endpoints themselves stay reachable, because turning
+    /// the cache off should stop new work being cached, not break a page that
+    /// is mid-request.
     /// </remarks>
     public bool EnableSignalCache { get; set; } = true;
 
@@ -39,8 +43,11 @@ public class PluginConfiguration : BasePluginConfiguration
     /// cache. Zero means unbounded.
     /// </summary>
     /// <remarks>
-    /// Placeholder for issue #9. A bit-packed 100 Hz signal is roughly 45 KB per
-    /// hour of runtime, so the default is generous by design.
+    /// A bit-packed 100 Hz signal is roughly 45 KB per hour of runtime and
+    /// gzips well below that, so 512 MB is thousands of films. Read fresh on
+    /// every write, so lowering it takes effect on the next POST rather than at
+    /// the next restart: the cache evicts least-recently-used entries until it
+    /// is back under the cap.
     /// </remarks>
     public int SignalCacheSizeLimitMb { get; set; } = 512;
 }
