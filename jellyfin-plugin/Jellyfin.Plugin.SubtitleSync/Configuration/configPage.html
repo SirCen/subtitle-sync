@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Subtitle Sync</title>
+  </head>
+  <body>
+    <!--
+      Deliberately minimal. The real sync UI is issue #12; this exists so the
+      plugin has a reachable, working settings page from day one.
+
+      Jellyfin injects this fragment into its own shell, so there is no styling
+      of our own here: the emby-* classes are the client's.
+    -->
+    <div
+      id="subtitleSyncConfigPage"
+      data-role="page"
+      class="page type-interior pluginConfigurationPage"
+      data-require="emby-input,emby-button,emby-checkbox"
+    >
+      <div data-role="content">
+        <div class="content-primary">
+          <form id="subtitleSyncConfigForm">
+            <h2>Subtitle Sync</h2>
+
+            <div class="checkboxContainer checkboxContainerWithDescription">
+              <label class="emby-checkbox-label">
+                <input id="overwriteOriginal" type="checkbox" is="emby-checkbox" />
+                <span>Overwrite the original subtitle file</span>
+              </label>
+              <div class="fieldDescription checkboxFieldDescription">
+                Off by default. When off, a synced track is written alongside the
+                original as &lt;base&gt;.&lt;lang&gt;.synced.srt and nothing is
+                destroyed.
+              </div>
+            </div>
+
+            <div class="checkboxContainer checkboxContainerWithDescription">
+              <label class="emby-checkbox-label">
+                <input id="enableSignalCache" type="checkbox" is="emby-checkbox" />
+                <span>Cache analysed speech signals on the server</span>
+              </label>
+              <div class="fieldDescription checkboxFieldDescription">
+                Lets a repeat sync of the same file skip the audio decode. Not
+                implemented yet (issue #9).
+              </div>
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="signalCacheSizeLimitMb">
+                Speech signal cache limit (MB)
+              </label>
+              <input
+                id="signalCacheSizeLimitMb"
+                type="number"
+                is="emby-input"
+                min="0"
+                step="1"
+              />
+              <div class="fieldDescription">Zero means no limit.</div>
+            </div>
+
+            <div>
+              <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                <span>Save</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <script type="text/javascript">
+        (function () {
+          var pluginId = 'e981c765-b769-44a1-a4fe-805df5bb6d6b';
+
+          function load(page) {
+            Dashboard.showLoadingMsg();
+            ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+              page.querySelector('#overwriteOriginal').checked = !!config.OverwriteOriginal;
+              page.querySelector('#enableSignalCache').checked = !!config.EnableSignalCache;
+              page.querySelector('#signalCacheSizeLimitMb').value =
+                config.SignalCacheSizeLimitMb;
+              Dashboard.hideLoadingMsg();
+            });
+          }
+
+          function save(page) {
+            Dashboard.showLoadingMsg();
+            ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+              config.OverwriteOriginal = page.querySelector('#overwriteOriginal').checked;
+              config.EnableSignalCache = page.querySelector('#enableSignalCache').checked;
+              config.SignalCacheSizeLimitMb =
+                parseInt(page.querySelector('#signalCacheSizeLimitMb').value, 10) || 0;
+
+              ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                Dashboard.processPluginConfigurationUpdateResult(result);
+              });
+            });
+          }
+
+          document
+            .querySelector('#subtitleSyncConfigPage')
+            .addEventListener('pageshow', function () {
+              load(this);
+            });
+
+          document
+            .querySelector('#subtitleSyncConfigForm')
+            .addEventListener('submit', function (e) {
+              save(document.querySelector('#subtitleSyncConfigPage'));
+              e.preventDefault();
+              return false;
+            });
+        })();
+      </script>
+    </div>
+  </body>
+</html>

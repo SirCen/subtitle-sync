@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Jellyfin 10.11 runs on net9.0 (Jellyfin.Server/Jellyfin.Server.csproj at v10.11.11). -->
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.SubtitleSync</RootNamespace>
+    <AssemblyName>Jellyfin.Plugin.SubtitleSync</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>false</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>NU1902;NU1903</WarningsNotAsErrors>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!--
+      CA1724: "the type name Plugin conflicts with the namespace Jellyfin.Plugin".
+      Unavoidable. Jellyfin's plugin assemblies are conventionally named
+      Jellyfin.Plugin.* and the entry point is conventionally called Plugin.
+    -->
+    <NoWarn>$(NoWarn);CA1724</NoWarn>
+
+    <!-- Kept in step with the repository manifest version (issue #15). -->
+    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      ExcludeAssets=runtime keeps the server's own assemblies out of the plugin
+      output. The server already has them loaded; shipping copies is how you get
+      type-identity failures at load time.
+    -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.11">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Jellyfin.Model" Version="10.11.11">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+
+    <!--
+      Needed by issue #13: the File Transformation plugin's RegisterTransformation
+      takes a Newtonsoft.Json.Linq.JObject. Referenced now so the dependency is
+      declared in one place; no injection logic exists yet.
+    -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Configuration\configPage.html" />
+    <EmbeddedResource Include="Configuration\configPage.html" />
+  </ItemGroup>
+
+</Project>

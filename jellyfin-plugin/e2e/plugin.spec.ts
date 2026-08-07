@@ -1,11 +1,13 @@
 /**
  * The plugin-specific smoke tests from issue #19.
  *
- * ALL OF THESE ARE SKIPPED ON PURPOSE. The C# plugin does not exist yet, so
- * there is nothing to assert against. They are written out in full rather than
- * left as TODOs so that whoever lands each piece has a ready-made check: drop
- * the built DLL into jellyfin-plugin/docker/plugins/SubtitleSync/, restart the
- * container, remove the `.skip`, and the test either passes or tells you why not.
+ * THE SKIPPED ONES ARE SKIPPED ON PURPOSE: the behaviour they assert does not
+ * exist yet. They are written out in full rather than left as TODOs so that
+ * whoever lands each piece has a ready-made check: drop the built DLL into
+ * jellyfin-plugin/docker/plugins/SubtitleSync/, restart the container, remove
+ * the `.skip`, and the test either passes or tells you why not.
+ *
+ * The two Dashboard tests are live as of #3.
  *
  * Enabling issues:
  *   #3  scaffold the plugin           -> the two Dashboard tests
@@ -39,9 +41,10 @@ async function openSubtitlesMenu(page: Page): Promise<void> {
 }
 
 test.describe("plugin: Dashboard integration", () => {
-  // ENABLE WITH #3 (scaffold the C# plugin project). Needs the built DLL in
-  // jellyfin-plugin/docker/plugins/SubtitleSync/ and a container restart.
-  test.skip("plugin appears under Dashboard > Plugins", async ({ page }) => {
+  // Enabled by #3. Needs the built DLL in
+  // jellyfin-plugin/docker/plugins/SubtitleSync/ and a container restart; see
+  // jellyfin-plugin/README.md for the one-liner.
+  test("plugin appears under Dashboard > Plugins", async ({ page }) => {
     const admin = await adminSession();
     const plugins = await listPlugins(admin);
     expect(
@@ -55,9 +58,9 @@ test.describe("plugin: Dashboard integration", () => {
     await expect(page.getByText(PLUGIN_NAME, { exact: false }).first()).toBeVisible();
   });
 
-  // ENABLE WITH #3. The config page is the fallback route that #13 depends on
+  // Enabled by #3. The config page is the fallback route that #13 depends on
   // being genuinely usable, so "it renders" is the minimum bar.
-  test.skip("plugin config page renders", async ({ page }) => {
+  test("plugin config page renders", async ({ page }) => {
     await loginAsAdmin(page);
     await page.goto(`/web/#/configurationpage?name=${encodeURIComponent(PLUGIN_NAME)}`);
 
