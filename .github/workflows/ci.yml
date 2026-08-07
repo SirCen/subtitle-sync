@@ -73,6 +73,23 @@ jobs:
           # refresh cannot quietly move us off .NET 9.
           dotnet-version: 9.0.x
 
+      # Node is load-bearing for the *C#* build: the csproj's BuildWebBundle
+      # target shells out to `node jellyfin-plugin/web/build.mjs` to produce the
+      # esbuild bundle it embeds as a resource. Without this the build fails
+      # with "node_modules is missing or incomplete (no esbuild)".
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        # Repo root, not jellyfin-plugin: esbuild is a root devDependency and
+        # the bundle imports lib/ directly. `npm install` rather than `npm ci`
+        # for the same reason as the web job - the lockfile is generated on
+        # Windows and omits Linux-only optional deps.
+        working-directory: .
+        run: npm install --no-audit --no-fund
+
       # No NuGet cache step on purpose: a cold restore of this solution takes
       # about 4 seconds, which is not worth a cache key to maintain.
       - name: Restore
