@@ -12,12 +12,16 @@
  * Enabling issues:
  *   #3  scaffold the plugin           -> the two Dashboard tests
  *   #13 File Transformation injection -> the banner and Subtitles-menu tests
- *   #8  save endpoint                 -> the full sync run
+ *   #8  save endpoint                 -> the save block, live as of that issue
+ *   #12 sync page UI                  -> the one remaining skipped sync run
  *
  * Selectors below are the current best guess at the 10.11 web client's DOM and
  * are expected to need adjustment when first run for real. That is the point of
  * having the harness: they can be adjusted against a live server in minutes.
  */
+
+import { readFile, rm } from "node:fs/promises";
+import path from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
 
@@ -26,9 +30,14 @@ import {
   findFixtureItemId,
   getItem,
   gotoItemDetail,
+  hostPathFor,
   listPlugins,
   loginAsAdmin,
   loginAsViewer,
+  refreshItem,
+  saveSyncedSubtitle,
+  viewerSession,
+  waitForSubtitleStreams,
 } from "./harness";
 
 const PLUGIN_NAME = "Subtitle Sync";
@@ -134,22 +143,166 @@ test.describe("plugin: Subtitles menu injection (#13)", () => {
   });
 });
 
-test.describe("plugin: end-to-end sync", () => {
-  // ENABLE WITH #8 (save endpoint). The fixture clip is short, so a real run is
-  // fast enough to be a practical smoke test rather than a nightly job.
-  //
-  // Note this test mutates the seeded library by writing a new .srt next to the
-  // fixture. Run `npm run jf:down -- --purge && npm run jf:up` for a clean slate.
-  test.skip("a full sync run produces a sibling .srt that shows up as a new track", async ({
-    page,
-  }) => {
+test.describe("plugin: saving a synced subtitle (#8)", () => {
+  const SYNCED_SRT =
+    "1\n00:00:02,500 --> 00:00:04,500\nShifted line one\n\n" +
+    "2\n00:00:06,000 --> 00:00:08,000\nShifted line two\n";
+
+  /**
+   * Everything this block writes into the seeded library, cleaned up after each
+   * test. The save endpoint reports the path it actually used - collision
+   * handling may have changed it - so the only reliable record is what came
+   * back.
+   */
+  const written: string[] = [];
+
+  test.afterEach(async () => {
+    for (const containerPath of written.splice(0)) {
+      await rm(hostPathFor(containerPath), { force: true });
+    }
+
+    // Put the library's view back where the seed left it, so the next test does
+    // not see a stale track for a file that is gone.
+    const admin = await adminSession();
+    const itemId = await findFixtureItemId(admin);
+    await refreshItem(admin, itemId);
+    await waitForSubtitleStreams(admin, itemId, (streams) => streams.length === 1);
+  });
+
+  /**
+   * The meaningful part of the original end-to-end test, enabled now.
+   *
+   * It stops short of driving the browser: the sync page (#12) and the injected
+   * menu item (#13) do not exist, so there is no UI to click. What it does cover
+   * is the whole server half - the write lands as a sibling of the media file,
+   * the track Jellyfin then indexes is the one the endpoint said it wrote, and
+   * the file it was derived from is untouched.
+   */
+  test("a saved subtitle lands beside the media file and becomes a new track", async () => {
     const admin = await adminSession();
     const itemId = await findFixtureItemId(admin);
 
     const before = await getItem(admin, itemId);
-    const subtitlesBefore = (before.MediaStreams ?? []).filter(
-      (s) => s.Type === "Subtitle",
-    ).length;
+    const original = (before.MediaStreams ?? []).find(
+      (s) => s.Type === "Subtitle" && s.IsExternal,
+    );
+    expect(original?.Path, "the fixture should have its seeded external track").toBeTruthy();
+
+    const originalBytes = await readFile(hostPathFor(original!.Path!));
+
+    const saved = await saveSyncedSubtitle(admin, itemId, 0, SYNCED_SRT);
+    expect(saved.status, saved.detail).toBe(200);
+    written.push(saved.path!);
+
+    // Named after the media file, in the media file's own folder, and not the
+    // file it came from.
+    expect(saved.fileName).toBe("Sample Clip (2020).eng.synced.srt");
+    expect(saved.overwroteSource).toBe(false);
+    expect(saved.cueCount).toBe(2);
+    expect(path.posix.dirname(saved.path!)).toBe(path.posix.dirname(original!.Path!));
+
+    // THE ORIGINAL IS UNTOUCHED. This is the promise the whole issue rests on.
+    expect(await readFile(hostPathFor(original!.Path!))).toEqual(originalBytes);
+
+    // And the refresh the endpoint queued makes it a real track, without a
+    // manual library scan.
+    const streams = await waitForSubtitleStreams(admin, itemId, (s) => s.length > 1);
+    expect(streams.some((s) => s.Path === saved.path)).toBe(true);
+  });
+
+  /**
+   * The collision rule, which is why the response reports a path at all.
+   */
+  test("a second save takes the next collision suffix rather than replacing the first", async () => {
+    const admin = await adminSession();
+    const itemId = await findFixtureItemId(admin);
+
+    const first = await saveSyncedSubtitle(admin, itemId, 0, SYNCED_SRT);
+    expect(first.status, first.detail).toBe(200);
+    written.push(first.path!);
+
+    const second = await saveSyncedSubtitle(admin, itemId, 0, SYNCED_SRT);
+    expect(second.status, second.detail).toBe(200);
+    written.push(second.path!);
+
+    expect(second.path).not.toBe(first.path);
+    expect(second.fileName).toBe("Sample Clip (2020).eng.synced.2.srt");
+    expect(await readFile(hostPathFor(first.path!), "utf8")).toContain("Shifted line one");
+  });
+
+  /**
+   * Concurrency, which is the failure mode that costs a user their work rather
+   * than merely erroring. Every request must end up with its own file: none may
+   * silently overwrite another's.
+   */
+  test("simultaneous saves each get their own file", async () => {
+    const admin = await adminSession();
+    const itemId = await findFixtureItemId(admin);
+
+    const payloads = Array.from(
+      { length: 8 },
+      (_, i) => `1\n00:00:01,500 --> 00:00:04,500\nRequest ${i}\n`,
+    );
+
+    const results = await Promise.all(
+      payloads.map((srt) => saveSyncedSubtitle(admin, itemId, 0, srt)),
+    );
+
+    for (const result of results) {
+      expect(result.status, result.detail).toBe(200);
+      written.push(result.path!);
+    }
+
+    expect(new Set(results.map((r) => r.path)).size).toBe(payloads.length);
+
+    const contents = await Promise.all(
+      results.map((r) => readFile(hostPathFor(r.path!), "utf8")),
+    );
+    expect(new Set(contents).size).toBe(payloads.length);
+  });
+
+  /**
+   * The permission split from the epic: read and analyse are
+   * SubtitleManagement, saving is RequiresElevation. A non-admin must be stopped
+   * by the server, not merely by a hidden menu item.
+   */
+  test("a non-admin user cannot save", async () => {
+    const admin = await adminSession();
+    const itemId = await findFixtureItemId(admin);
+    const viewer = await viewerSession();
+
+    const result = await saveSyncedSubtitle(viewer, itemId, 0, SYNCED_SRT);
+
+    expect(result.status).toBe(403);
+  });
+
+  /**
+   * Attacker-controlled text stops at the endpoint. Nothing is created, and the
+   * refusal names what is wrong.
+   */
+  test("content that is not SRT is refused with an actionable message", async () => {
+    const admin = await adminSession();
+    const itemId = await findFixtureItemId(admin);
+
+    const result = await saveSyncedSubtitle(
+      admin,
+      itemId,
+      0,
+      "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n",
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.detail).toContain("WebVTT");
+  });
+
+  // STILL GATED ON #12 AND #13: the same run driven through the plugin's own
+  // sync page, with the analysis happening in the browser. There is no page to
+  // open yet, so there is nothing here a selector could find.
+  test.skip("a full sync run through the plugin page produces a sibling .srt", async ({
+    page,
+  }) => {
+    const admin = await adminSession();
+    const itemId = await findFixtureItemId(admin);
 
     await loginAsAdmin(page);
     await page.goto(`/web/#/configurationpage?name=SubtitleSync&itemId=${itemId}`);
@@ -160,14 +313,7 @@ test.describe("plugin: end-to-end sync", () => {
     // plugin's own completion signal rather than a fixed sleep.
     await expect(page.getByText(/saved|complete/i).first()).toBeVisible({ timeout: 300_000 });
 
-    const after = await getItem(admin, itemId);
-    const subtitlesAfter = (after.MediaStreams ?? []).filter(
-      (s) => s.Type === "Subtitle",
-    ).length;
-
-    expect(subtitlesAfter).toBeGreaterThan(subtitlesBefore);
-    expect(
-      (after.MediaStreams ?? []).some((s) => s.Path?.includes(".synced.srt")),
-    ).toBe(true);
+    const streams = await waitForSubtitleStreams(admin, itemId, (s) => s.length > 1);
+    expect(streams.some((s) => s.Path?.includes(".synced.srt"))).toBe(true);
   });
 });

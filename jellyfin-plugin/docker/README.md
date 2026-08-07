@@ -143,7 +143,7 @@ with a comment naming the issue that enables it:
 | "Sync subtitles..." appears in the Subtitles menu for an admin | #13 |
 | the menu item does not appear for a non-admin user | #13 |
 | the menu item survives SPA navigation | #13 |
-| a full sync run produces a sibling `.srt` | #8 |
+| a full sync run through the plugin page produces a sibling `.srt` | #12 |
 
 To enable one: drop the DLL in, restart, delete the `.skip`. Their selectors are
 a best guess at the client's DOM and will likely need a pass against a live

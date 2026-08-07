@@ -7,6 +7,8 @@
  * server up.
  */
 
+import path from "node:path";
+
 import { expect, type Page } from "@playwright/test";
 
 import config from "../docker/harness.config.json";
@@ -68,6 +70,135 @@ export async function authenticate(
 
 export function adminSession(): Promise<Session> {
   return authenticate(ADMIN_USERNAME, ADMIN_PASSWORD);
+}
+
+export function viewerSession(): Promise<Session> {
+  return authenticate(VIEWER_USERNAME, VIEWER_PASSWORD);
+}
+
+export interface SaveResult {
+  status: number;
+  /** Present on success. The path the plugin actually wrote, container-side. */
+  path?: string;
+  fileName?: string;
+  overwroteSource?: boolean;
+  cueCount?: number;
+  /** ProblemDetails detail on a refusal. */
+  detail?: string;
+}
+
+/**
+ * Calls POST /SubtitleSync/Save, the plugin's only write endpoint.
+ *
+ * The body is raw SRT with a text/plain content type, not JSON: the endpoint
+ * reads the stream by hand so its size cap applies before the allocation.
+ */
+export async function saveSyncedSubtitle(
+  session: Session,
+  itemId: string,
+  subtitleStreamIndex: number,
+  srt: string,
+): Promise<SaveResult> {
+  const query = new URLSearchParams({ index: String(subtitleStreamIndex) });
+
+  const response = await fetch(`${JELLYFIN_URL}/SubtitleSync/Save/${itemId}?${query}`, {
+    method: "POST",
+    headers: {
+      Authorization: authHeader(session.token),
+      "Content-Type": "text/plain; charset=utf-8",
+    },
+    body: srt,
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as { detail?: string };
+    return { status: response.status, detail: body.detail };
+  }
+
+  const body = (await response.json()) as {
+    Path: string;
+    FileName: string;
+    OverwroteSource: boolean;
+    CueCount: number;
+  };
+
+  return {
+    status: response.status,
+    path: body.Path,
+    fileName: body.FileName,
+    overwroteSource: body.OverwroteSource,
+    cueCount: body.CueCount,
+  };
+}
+
+/**
+ * Maps a path the server reported to where that file lives on this machine.
+ *
+ * The compose file binds ./media to /media, so the two differ only by prefix.
+ * Needed because the save endpoint reports container paths and the tests have
+ * to clean up after themselves on the host.
+ *
+ * <p>__dirname rather than import.meta.url: this package has no "type":
+ * "module", so Playwright transpiles these specs to CommonJS and import.meta
+ * would not survive.</p>
+ */
+export function hostPathFor(containerPath: string): string {
+  if (!containerPath.startsWith("/media/")) {
+    throw new Error(`Not a path under the harness media mount: ${containerPath}`);
+  }
+
+  return path.join(__dirname, "..", "docker", "media", containerPath.slice("/media/".length));
+}
+
+/** Asks the server to re-probe an item, the way the save endpoint does. */
+export async function refreshItem(session: Session, itemId: string): Promise<void> {
+  const query = new URLSearchParams({
+    metadataRefreshMode: "Default",
+    replaceAllMetadata: "false",
+  });
+
+  const response = await fetch(`${JELLYFIN_URL}/Items/${itemId}/Refresh?${query}`, {
+    method: "POST",
+    headers: { Authorization: authHeader(session.token) },
+  });
+
+  if (!response.ok) {
+    throw new Error(`POST /Items/${itemId}/Refresh -> ${response.status}`);
+  }
+}
+
+/**
+ * Polls an item until its subtitle streams satisfy a predicate.
+ *
+ * The save endpoint queues a refresh rather than awaiting one - that is what
+ * Jellyfin itself does after downloading a subtitle - so a new track appears
+ * shortly after the response, not with it.
+ */
+export async function waitForSubtitleStreams(
+  session: Session,
+  itemId: string,
+  predicate: (streams: MediaStream[]) => boolean,
+  timeoutMs = 60_000,
+): Promise<MediaStream[]> {
+  const deadline = Date.now() + timeoutMs;
+
+  for (;;) {
+    const item = await getItem(session, itemId);
+    const streams = (item.MediaStreams ?? []).filter((s) => s.Type === "Subtitle");
+
+    if (predicate(streams)) {
+      return streams;
+    }
+
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Subtitle streams on ${itemId} never matched within ${timeoutMs} ms: ` +
+          JSON.stringify(streams),
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 export interface MediaStream {
