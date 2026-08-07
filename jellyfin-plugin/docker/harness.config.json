@@ -10,6 +10,12 @@
   "libraryName": "Harness Movies",
   "movieFolder": "Sample Clip (2020)",
   "movieName": "Sample Clip",
+
+  "_syncableComment": "The second seeded movie. Unlike Sample Clip - whose audio the VAD reads as ~92% speech, leaving nothing to correlate against - this one has a deliberate speech/silence pattern and its subtitle track is displaced by a known offset, so a sync run over it has a right answer to be checked against. No year in the folder name, unlike Sample Clip (2020): Jellyfin left the year in the resolved item Name for this folder (\"Structured Clip (2021)\") while stripping it for Sample Clip, and a name that depends on a resolver quirk is not something the specs should look up by. Without a year there is nothing to strip. See test/fixtures/PROVENANCE.md and issue #20.",
+  "syncableFolder": "Structured Clip",
+  "syncableName": "Structured Clip",
+  "syncableKnownOffset": -3.2,
+
   "containerMediaRoot": "/media/movies",
 
   "_env": {

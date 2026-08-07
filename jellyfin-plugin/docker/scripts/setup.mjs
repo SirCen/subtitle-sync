@@ -16,6 +16,8 @@ import {
   JELLYFIN_URL,
   LIBRARY_NAME,
   MOVIE_NAME,
+  SYNCABLE_KNOWN_OFFSET,
+  SYNCABLE_NAME,
   VIEWER_PASSWORD,
   VIEWER_USERNAME,
 } from "./config.mjs";
@@ -79,6 +81,15 @@ export async function setup({ startContainer = true, log = console.log } = {}) {
     log,
   });
 
+  // The fixture a sync can actually be checked against - see #20 and the
+  // header of seed-library.mjs.
+  const syncable = await waitForItem({
+    token: admin.token,
+    userId: admin.userId,
+    name: SYNCABLE_NAME,
+    log,
+  });
+
   const plugins = await listPlugins(admin.token);
   log(
     plugins.length
@@ -91,8 +102,12 @@ export async function setup({ startContainer = true, log = console.log } = {}) {
   log(`  admin      ${ADMIN_USERNAME} / ${ADMIN_PASSWORD}`);
   log(`  non-admin  ${VIEWER_USERNAME} / ${VIEWER_PASSWORD}`);
   log(`  item       ${MOVIE_NAME} (${item.Id})`);
+  log(
+    `  item       ${SYNCABLE_NAME} (${syncable.Id}) ` +
+    `- subtitles displaced by ${SYNCABLE_KNOWN_OFFSET}s, sync should recover it`,
+  );
 
-  return { admin, item, plugins };
+  return { admin, item, syncable, plugins };
 }
 
 const invokedDirectly = process.argv[1]?.replace(/\\/g, "/").endsWith("scripts/setup.mjs");

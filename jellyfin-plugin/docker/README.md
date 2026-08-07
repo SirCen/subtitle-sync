@@ -44,6 +44,7 @@ npm run jf:down -- --purge   # stop and wipe volumes + seeded media
 | Non-admin | `viewer` / `viewer-password` |
 | Library | "Harness Movies" -> `/media/movies` |
 | Item | "Sample Clip" (2020), with an external English `.srt` track |
+| Item | "Structured Clip", ditto, but its track is displaced by a **known -3.2 s** |
 
 Everything above is defined once in `harness.config.json` and overridable by env
 var; see the `_env` block in that file.
@@ -60,13 +61,56 @@ which is not what this plugin targets. `10.11.11` is the newest release on the
 Jellyfin recognises as a movie with an external subtitle:
 
 ```
-media/movies/Sample Clip (2020)/Sample Clip (2020).mp4     <- test/fixtures/sample.mp4
-media/movies/Sample Clip (2020)/Sample Clip (2020).en.srt  <- test/fixtures/sample.srt
+media/movies/Sample Clip (2020)/Sample Clip (2020).mp4          <- test/fixtures/sample.mp4
+media/movies/Sample Clip (2020)/Sample Clip (2020).en.srt       <- test/fixtures/sample.srt
+media/movies/Structured Clip/Structured Clip.mp4                <- test/fixtures/structured.mp4
+media/movies/Structured Clip/Structured Clip.en.srt             <- test/fixtures/structured.offset.srt
 ```
 
-Nothing is downloaded. The clip is ~2 MB and its provenance is documented in
-`test/fixtures/PROVENANCE.md`. `media/` is gitignored so the fixture is never
-committed twice.
+Nothing is downloaded. The two clips are ~2 MB and ~150 KB, and their provenance
+is documented in `test/fixtures/PROVENANCE.md`. `media/` is gitignored so the
+fixtures are never committed twice.
+
+#### Two movies, because they answer different questions
+
+**Sample Clip** is real footage with real dialogue. It proves the plumbing works
+on something that is not synthetic. It cannot prove a sync is *correct*: the VAD
+flags ~92% of its audio as speech, so there is no speech/silence structure to
+correlate against and `analyze` misses by about 8 s on it.
+
+**Structured Clip** is synthesised so that it can. Its audio alternates speech
+and silence on a known irregular schedule, and its seeded `.en.srt` is the
+correct track displaced by exactly **-3.2 s**. So:
+
+> **Any test that asserts a sync produced the right answer must use Structured
+> Clip.** Asserting an offset against Sample Clip passes vacuously or asserts a
+> wrong number.
+
+The offset is in `harness.config.json` as `syncableKnownOffset`, exposed to the
+Node scripts as `SYNCABLE_KNOWN_OFFSET` and to the Playwright specs as the
+same name from `e2e/harness.ts`, alongside `findSyncableItemId(session)`.
+`test/structured.test.ts` asserts the same recovery at the unit level, so if the
+e2e test disagrees with it the fault is in the plugin, not the algorithm.
+
+A ratio (framerate-drift) input, `test/fixtures/structured.ratio.srt`, is
+committed too and covered by `test/structured.test.ts`. It is deliberately *not*
+seeded: a second subtitle track would make the track index the e2e test picks
+non-obvious for no extra plugin coverage. Seed it if you want to exercise ratio
+correction through the UI.
+
+Regenerate both synthesised files with
+`node test/oracle/gen_structured_fixture.mjs` (needs ffmpeg on PATH).
+
+#### Why the second folder has no year
+
+`Sample Clip (2020)` resolves to an item named "Sample Clip" - Jellyfin strips
+the year. The same folder shape with a different name did **not**: it resolved
+to "Structured Clip (2021)", year included. That reproduced on a purged server,
+on both the initial scan and a later refresh, with either fixture's media and
+with several years, so it is not the media, the year or the scan type. Rather
+than depend on which way the resolver goes, the folder is simply
+`Structured Clip` - with no year there is nothing to strip, and the item name is
+the folder name.
 
 The library is created with **metadata fetchers disabled**. Left on, Jellyfin
 would query TMDB and rename the clip to whatever it matched, which would make
@@ -96,8 +140,8 @@ Routes were verified against the `v10.11.11` tag of `jellyfin/jellyfin`
 
 ## Dropping in a plugin build
 
-The C# project does not exist yet (#3), so there is no build output path to
-mount. Instead the compose file mounts a **committed staging directory**:
+Rather than mounting the build output directly, the compose file mounts a
+**committed staging directory** you copy into:
 
 ```
 ./plugins/SubtitleSync  ->  /config/plugins/SubtitleSync
@@ -106,10 +150,10 @@ mount. Instead the compose file mounts a **committed staging directory**:
 It is committed with a `.gitkeep` on purpose. A bind mount of a path that does
 not exist on the host would be created root-owned by the daemon on first `up`,
 which is a confusing failure; an existing empty directory is harmless - Jellyfin
-finds no assemblies and carries on, so every non-plugin smoke test still passes
-today.
+finds no assemblies and carries on, so the non-plugin smoke tests still pass
+against a server with nothing staged.
 
-Once the plugin builds, the loop is:
+The loop is:
 
 ```bash
 dotnet publish -c Release                       # from the plugin project
@@ -160,6 +204,9 @@ with a comment naming the issue that enables it:
 | the menu item does not appear for a non-admin user | #13 |
 | the menu item survives SPA navigation | #13 |
 | a full sync run through the plugin page produces a sibling `.srt` | #12 |
+
+The #12 test should run against **Structured Clip**, not Sample Clip - see
+"Two movies" above.
 
 To enable one: drop the DLL in, restart, delete the `.skip`. Their selectors are
 a best guess at the client's DOM and will likely need a pass against a live

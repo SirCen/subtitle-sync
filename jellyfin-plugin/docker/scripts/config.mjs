@@ -46,14 +46,33 @@ export const LIBRARY_NAME = raw.libraryName;
 export const MOVIE_FOLDER = raw.movieFolder;
 export const MOVIE_NAME = raw.movieName;
 
+/**
+ * The second seeded movie: the synthesised fixture with real speech/silence
+ * structure, seeded with a subtitle track displaced by a known offset. This is
+ * the one a sync run can be checked against - see the `_syncableComment` in
+ * harness.config.json and issue #20.
+ */
+export const SYNCABLE_FOLDER = raw.syncableFolder;
+export const SYNCABLE_NAME = raw.syncableName;
+
+/** Seconds. `analyze` must recover this from the seeded track. */
+export const SYNCABLE_KNOWN_OFFSET = raw.syncableKnownOffset;
+
 /** Path inside the container. Must match the ./media mount in docker-compose.yml. */
 export const CONTAINER_MEDIA_ROOT = raw.containerMediaRoot;
 
 /** Host path the seeded library is written to. */
 export const HOST_MEDIA_ROOT = path.join(DOCKER_DIR, "media", "movies");
 
-export const FIXTURE_MP4 = path.join(REPO_ROOT, "test", "fixtures", "sample.mp4");
-export const FIXTURE_SRT = path.join(REPO_ROOT, "test", "fixtures", "sample.srt");
+const FIXTURE_DIR = path.join(REPO_ROOT, "test", "fixtures");
+
+export const FIXTURE_MP4 = path.join(FIXTURE_DIR, "sample.mp4");
+export const FIXTURE_SRT = path.join(FIXTURE_DIR, "sample.srt");
+
+/** Media whose audio the VAD can actually resolve into speech and silence. */
+export const SYNCABLE_MP4 = path.join(FIXTURE_DIR, "structured.mp4");
+/** Its subtitles, displaced by SYNCABLE_KNOWN_OFFSET. The sync input. */
+export const SYNCABLE_SRT = path.join(FIXTURE_DIR, "structured.offset.srt");
 
 /**
  * Sent on every API call. Jellyfin requires this on authenticated requests and

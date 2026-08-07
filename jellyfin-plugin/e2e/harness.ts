@@ -24,6 +24,18 @@ export const VIEWER_PASSWORD = process.env.JELLYFIN_VIEWER_PASSWORD ?? config.vi
 
 export const MOVIE_NAME = config.movieName;
 
+/**
+ * The second seeded movie. Its audio alternates speech and silence on a known
+ * schedule and its subtitle track is displaced by SYNCABLE_KNOWN_OFFSET, so a
+ * sync run over it has a right answer. Assert sync correctness against this
+ * one, not MOVIE_NAME - the VAD reads ~92% of Sample Clip as speech, which
+ * leaves nothing to correlate against. See issue #20.
+ */
+export const SYNCABLE_NAME = config.syncableName;
+
+/** Seconds. What a correct sync of SYNCABLE_NAME's track must recover. */
+export const SYNCABLE_KNOWN_OFFSET = config.syncableKnownOffset;
+
 /** Jellyfin requires this header shape on authenticated requests. */
 export function authHeader(token?: string): string {
   const parts = [
@@ -225,13 +237,16 @@ export async function getItem(session: Session, itemId: string): Promise<Item> {
   return (await response.json()) as Item;
 }
 
-/** Resolves the seeded fixture movie's item id. */
-export async function findFixtureItemId(session: Session): Promise<string> {
+/** Resolves a seeded fixture movie's item id by name. */
+export async function findItemIdByName(
+  session: Session,
+  name: string,
+): Promise<string> {
   const query = new URLSearchParams({
     userId: session.userId,
     recursive: "true",
     includeItemTypes: "Movie",
-    searchTerm: MOVIE_NAME,
+    searchTerm: name,
     limit: "20",
   });
 
@@ -239,14 +254,27 @@ export async function findFixtureItemId(session: Session): Promise<string> {
     headers: { Authorization: authHeader(session.token) },
   });
   const result = (await response.json()) as { Items?: Item[] };
-  const item = result.Items?.find((i) => i.Name === MOVIE_NAME);
+  const item = result.Items?.find((i) => i.Name === name);
 
   if (!item) {
     throw new Error(
-      `Fixture movie "${MOVIE_NAME}" is not in the library. Run \`npm run jf:up\` first.`,
+      `Fixture movie "${name}" is not in the library. Run \`npm run jf:up\` first.`,
     );
   }
   return item.Id;
+}
+
+/** Resolves the seeded Sample Clip's item id. */
+export function findFixtureItemId(session: Session): Promise<string> {
+  return findItemIdByName(session, MOVIE_NAME);
+}
+
+/**
+ * Resolves the item id of the fixture a sync can be verified against. Use this
+ * wherever a test asserts on the offset a sync recovered.
+ */
+export function findSyncableItemId(session: Session): Promise<string> {
+  return findItemIdByName(session, SYNCABLE_NAME);
 }
 
 /** Every plugin the server has loaded. */

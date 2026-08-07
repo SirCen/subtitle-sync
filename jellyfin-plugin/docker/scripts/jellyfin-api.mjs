@@ -234,10 +234,13 @@ export async function waitForItem({
   userId,
   name,
   timeoutMs = 180_000,
+  refreshAfterMs = 45_000,
   log = console.log,
 }) {
   const deadline = Date.now() + timeoutMs;
+  const refreshAfter = Date.now() + refreshAfterMs;
   const release = keepAlive();
+  let refreshed = false;
 
   try {
     while (Date.now() < deadline) {
@@ -254,6 +257,18 @@ export async function waitForItem({
         log(`item "${name}": id ${item.Id}`);
         return item;
       }
+      if (!refreshed && Date.now() >= refreshAfter) {
+        // Media added to a library that already exists is invisible until a
+        // scan runs, and creating a library only scans it once. Kick one, once.
+        //
+        // Not immediately: a scan requested while the library-creation scan is
+        // still running raced it and produced items named "Structured Clip
+        // (2021)" - year still in the name - instead of "Structured Clip". So
+        // give the first scan a grace period to finish on its own.
+        refreshed = true;
+        log(`item "${name}": not indexed yet, requesting a library scan`);
+        await refreshLibrary(token);
+      }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   } finally {
@@ -263,6 +278,15 @@ export async function waitForItem({
   throw new Error(
     `Movie "${name}" never appeared in the library. Check that jellyfin-plugin/docker/media is seeded and mounted.`,
   );
+}
+
+/**
+ * Kicks a library scan. Creating a library scans it, but adding media to one
+ * that already exists does not, so a re-run that seeds a new fixture would
+ * otherwise wait forever for an item the server has never looked for.
+ */
+export async function refreshLibrary(token) {
+  await call("POST", "/Library/Refresh", { token });
 }
 
 /** Every plugin the server has loaded. Empty until the plugin DLL is dropped in. */
