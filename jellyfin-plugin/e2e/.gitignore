@@ -1,0 +1,4 @@
+# Playwright output, written here rather than at the repo root so this whole
+# harness stays inside the folder it owns.
+/.artifacts/
+/.report/

@@ -8,7 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "jf:up": "node jellyfin-plugin/docker/scripts/setup.mjs",
+    "jf:down": "node jellyfin-plugin/docker/scripts/teardown.mjs",
+    "jf:logs": "docker compose -f jellyfin-plugin/docker/docker-compose.yml logs -f jellyfin",
+    "jf:e2e": "playwright test"
   },
   "dependencies": {
     "@echogarden/fvad-wasm": "^0.2.0",
@@ -20,6 +24,7 @@
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
