@@ -27,8 +27,18 @@ public sealed record FfmpegPcmRequest
     /// decode, or <see langword="null"/> to let ffmpeg pick the default track.
     /// </summary>
     /// <remarks>
-    /// This is Jellyfin's <c>MediaStream.Index</c>, which counts every stream in
-    /// the file, not just the audio ones.
+    /// This is the stream's position within the container, counting every
+    /// stream in the file rather than just the audio ones, and it is what
+    /// <c>-map 0:N</c> expects.
+    /// <para>
+    /// It is NOT Jellyfin's <c>MediaStream.Index</c>. Jellyfin numbers external
+    /// sidecar subtitles into the same sequence, so a two-stream mp4 with a
+    /// sibling <c>.en.srt</c> is numbered subtitle 0, video 1, audio 2, and
+    /// passing that 2 straight through makes ffmpeg fail with
+    /// "Stream map '' matches no streams". Use
+    /// <see cref="PcmStreamPlanner"/>, which derives this value as the stream's
+    /// rank among non-external streams.
+    /// </para>
     /// </remarks>
     public int? AudioStreamIndex { get; init; }
 

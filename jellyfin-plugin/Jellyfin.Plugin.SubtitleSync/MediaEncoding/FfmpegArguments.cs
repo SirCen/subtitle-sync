@@ -195,7 +195,8 @@ public static class FfmpegArguments
 
         if (request.AudioStreamIndex is int index)
         {
-            // Absolute container index, matching Jellyfin's MediaStream.Index.
+            // Absolute container index, NOT Jellyfin's MediaStream.Index (which
+            // also numbers external sidecar subtitles). See FfmpegPcmRequest.
             // Deliberately not "0:a:N", which counts audio streams only and
             // would select the wrong track on any file with video first.
             args.Add("-map");
