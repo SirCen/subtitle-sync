@@ -1,0 +1,11 @@
+[
+  {
+    "guid": "e981c765-b769-44a1-a4fe-805df5bb6d6b",
+    "name": "Subtitle Sync",
+    "overview": "Re-time subtitle tracks against the audio they belong to.",
+    "description": "Subtitle Sync analyses the audio of a film or episode, compares it with the timings of a subtitle track, and writes a corrected copy of that track alongside the media. The analysis runs in your browser inside the Jellyfin dashboard; the server only decodes audio and saves the result.",
+    "owner": "SirCen",
+    "category": "Subtitles",
+    "versions": []
+  }
+]

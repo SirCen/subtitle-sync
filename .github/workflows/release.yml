@@ -1,0 +1,340 @@
+name: Release plugin
+
+# Tagging `vX.Y.Z` publishes the Jellyfin plugin:
+#
+#   tag -> build -> zip -> GitHub Release -> entry in public/jellyfin/manifest.json -> main
+#
+# The manifest is the file users point Jellyfin at. It is served from
+# https://subtitlesync.sircen.dev/jellyfin/manifest.json and, as a fallback, from
+# raw.githubusercontent.com. One file, two URLs, no runtime dependency.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Enough to create a release and to push the manifest commit back to main.
+permissions:
+  contents: write
+
+# Never run two releases at once: they would race on the manifest commit. Do not
+# cancel an in-progress one either, or a half-published release could be left
+# with an asset and no manifest entry.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  PLUGIN_CSPROJ: jellyfin-plugin/Jellyfin.Plugin.SubtitleSync/Jellyfin.Plugin.SubtitleSync.csproj
+  PLUGIN_ASSEMBLY: Jellyfin.Plugin.SubtitleSync.dll
+  PLUGIN_GUID: e981c765-b769-44a1-a4fe-805df5bb6d6b
+  PLUGIN_NAME: Subtitle Sync
+  # Minimum server version, not an exact match: InstallationManager filters with
+  # `Version.Parse(x.TargetAbi) <= appVer` and applies no upper bound. One entry
+  # covers every 10.11 patch and every later major. Research doc, section 13.
+  TARGET_ABI: 10.11.0.0
+  MANIFEST_PATH: public/jellyfin/manifest.json
+
+jobs:
+  release:
+    name: build, publish, manifest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v5
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          # The plugin targets net9.0 because that is what Jellyfin 10.11 runs
+          # on. The solution is a classic .sln so a 9.0.1xx SDK can open it.
+          dotnet-version: "9.0.x"
+
+      - name: Set up Node
+        # Not optional: `dotnet publish` below invokes node to build the esbuild
+        # bundle of lib/ that the assembly embeds (#10).
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        # `npm install` (not `npm ci`) for the same reason as ci.yml: the
+        # lockfile is generated on Windows and omits Linux-only optional deps.
+        run: npm install --no-audit --no-fund
+
+      - name: Derive the version from the tag
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          raw="${tag#v}"
+
+          if [[ ! "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::Tag '$tag' is not vMAJOR.MINOR.PATCH[.REVISION]."
+            exit 1
+          fi
+
+          # Jellyfin parses every version with System.Version. Normalise to four
+          # parts so the tag, the assembly, meta.json and the manifest are all
+          # spelled identically.
+          if [[ "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            version="$raw.0"
+          else
+            version="$raw"
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "zip_name=subtitle-sync_$version.zip"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $version from tag $tag"
+
+      - name: Check the csproj version matches the tag
+        # The csproj is the source of truth for the assembly; the tag ratifies a
+        # version that was already committed. Tagging without bumping the csproj
+        # fails here rather than shipping a manifest that claims a version the
+        # DLL does not carry.
+        run: |
+          set -euo pipefail
+          declared=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$PLUGIN_CSPROJ" | head -n1)
+          if [[ -z "$declared" ]]; then
+            echo "::error::No <Version> element in $PLUGIN_CSPROJ."
+            exit 1
+          fi
+          # Normalise a 3-part <Version> the same way the tag is normalised.
+          if [[ "$declared" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            declared="$declared.0"
+          fi
+          if [[ "$declared" != "${{ steps.version.outputs.version }}" ]]; then
+            echo "::error::Tag says ${{ steps.version.outputs.version }} but $PLUGIN_CSPROJ declares $declared. Bump the csproj and re-tag."
+            exit 1
+          fi
+          echo "csproj declares $declared"
+
+      - name: Publish the plugin
+        # The csproj's BuildWebBundle target shells out to node to run esbuild
+        # over lib/ and embeds the result (#10), so this needs Node and a
+        # populated node_modules - both set up above. Never pass
+        # -p:SkipWebBundle=true here: it would ship a stale or missing bundle.
+        run: >
+          dotnet publish "$PLUGIN_CSPROJ"
+          -c Release
+          -o publish
+          --nologo
+
+      - name: Check the built assembly version matches the tag
+        # Second, independent check: on the artefact rather than on the source.
+        # Catches a Directory.Build.props or an MSBuild override rewriting the
+        # version behind the csproj's back.
+        shell: pwsh
+        run: |
+          $expected = '${{ steps.version.outputs.version }}'
+          $dll = Join-Path 'publish' $env:PLUGIN_ASSEMBLY
+          $actual = [System.Reflection.AssemblyName]::GetAssemblyName($dll).Version.ToString()
+          if ($actual -ne $expected) {
+            Write-Output "::error::$env:PLUGIN_ASSEMBLY has AssemblyVersion $actual, tag says $expected."
+            exit 1
+          }
+          Write-Output "$env:PLUGIN_ASSEMBLY carries AssemblyVersion $actual"
+
+      - name: Assemble the install zip
+        id: package
+        # Jellyfin extracts the zip straight into
+        # `plugins/<name>_<version>/` with ZipFile.ExtractToDirectory, so the
+        # payload must sit at the zip root with no wrapping directory.
+        #
+        # Assemblies only: the .pdb and the XML doc file are build by-products,
+        # and the server's own assemblies are already excluded by
+        # ExcludeAssets=runtime in the csproj.
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          zip_name='${{ steps.version.outputs.zip_name }}'
+
+          if [[ ! -f "publish/$PLUGIN_ASSEMBLY" ]]; then
+            echo "::error::publish/$PLUGIN_ASSEMBLY is missing."
+            exit 1
+          fi
+
+          rm -rf stage && mkdir stage
+          cp publish/*.dll stage/
+
+          # Changelog: the annotated tag's message if there is one, otherwise a
+          # bare line. Shown in Dashboard > Plugins next to the version.
+          changelog=$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME")
+          if [[ -z "$changelog" ]]; then
+            changelog="Release $version"
+          fi
+
+          timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          # In-zip meta.json: MediaBrowser.Common.Plugins.PluginManifest. A
+          # different schema from the repository manifest. The server rewrites it
+          # on install, but it is what a manual zip drop reads.
+          assemblies=$(cd stage && ls *.dll | jq -R . | jq -sc .)
+          jq -n \
+            --arg category "Subtitles" \
+            --arg changelog "$changelog" \
+            --arg description "Re-time subtitle tracks against the audio they belong to." \
+            --arg guid "$PLUGIN_GUID" \
+            --arg name "$PLUGIN_NAME" \
+            --arg overview "Re-time subtitle tracks against the audio they belong to." \
+            --arg owner "SirCen" \
+            --arg targetAbi "$TARGET_ABI" \
+            --arg timestamp "$timestamp" \
+            --arg version "$version" \
+            --argjson assemblies "$assemblies" \
+            '{category: $category, changelog: $changelog, description: $description,
+              guid: $guid, name: $name, overview: $overview, owner: $owner,
+              targetAbi: $targetAbi, timestamp: $timestamp, version: $version,
+              status: "Active", autoUpdate: true, assemblies: $assemblies}' \
+            > stage/meta.json
+
+          (cd stage && zip -qr "../$zip_name" .)
+
+          checksum=$(md5sum "$zip_name" | cut -d' ' -f1)
+          {
+            echo "checksum=$checksum"
+            echo "timestamp=$timestamp"
+            echo "changelog=$changelog"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "$zip_name  md5 $checksum"
+          unzip -l "$zip_name"
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          zip_name='${{ steps.version.outputs.zip_name }}'
+          tag='${{ steps.version.outputs.tag }}'
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$zip_name" --clobber
+          else
+            gh release create "$tag" "$zip_name" \
+              --title "$tag" \
+              --generate-notes
+          fi
+
+      - name: Verify the published asset
+        # The manifest is about to promise these bytes at this URL. Fetch it back
+        # over the public URL and re-check the MD5 before making that promise.
+        env:
+          EXPECTED_CHECKSUM: ${{ steps.package.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          url="https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.zip_name }}"
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL --retry 3 -o downloaded.zip "$url"; then
+              break
+            fi
+            echo "Asset not servable yet (attempt $attempt), waiting."
+            sleep 5
+          done
+          actual=$(md5sum downloaded.zip | cut -d' ' -f1)
+          if [[ "$actual" != "$EXPECTED_CHECKSUM" ]]; then
+            echo "::error::$url serves md5 $actual, expected $EXPECTED_CHECKSUM."
+            exit 1
+          fi
+          echo "$url verified"
+
+      - name: Check out main for the manifest commit
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          path: main
+          # Full history: the update loop below re-fetches and hard-resets to
+          # origin/main on each attempt, which a shallow clone makes fragile.
+          fetch-depth: 0
+
+      - name: Add the version to the repository manifest
+        # Safety of this step:
+        #
+        # * Concurrent pushes. Each attempt resets hard to freshly fetched
+        #   origin/main and regenerates the entry from scratch, so there is
+        #   never a merge or a rebase to conflict. Last writer wins on a file
+        #   nobody else edits by hand.
+        # * Recursion. GITHUB_TOKEN pushes do not trigger workflows, and this
+        #   workflow only triggers on tags in any case. `[skip ci]` is belt and
+        #   braces for anyone re-running it with a PAT.
+        # * Idempotence. Re-running the same tag rewrites that version's entry
+        #   in place and exits cleanly if nothing changed.
+        #
+        # If main is branch-protected against direct pushes, grant this workflow
+        # a bypass; there is no PR-based alternative that keeps the manifest in
+        # step with the release.
+        working-directory: main
+        env:
+          # Via env, not inline `${{ }}`: the changelog comes from a tag message
+          # and must never be spliced into the shell.
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ZIP_NAME: ${{ steps.version.outputs.zip_name }}
+          CHANGELOG: ${{ steps.package.outputs.changelog }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+          TIMESTAMP: ${{ steps.package.outputs.timestamp }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          cat > "$RUNNER_TEMP/update-manifest.mjs" <<'EOF'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const [path, version, changelog, targetAbi, sourceUrl, checksum, timestamp] =
+            process.argv.slice(2);
+
+          const manifest = JSON.parse(readFileSync(path, "utf8"));
+          const guid = process.env.PLUGIN_GUID.toLowerCase();
+          const pkg = manifest.find((p) => p.guid.toLowerCase() === guid);
+          if (!pkg) {
+            throw new Error(`No package with guid ${guid} in ${path}`);
+          }
+
+          const entry = { version, changelog, targetAbi, sourceUrl, checksum, timestamp };
+          // Newest first, and re-running a tag replaces rather than duplicates.
+          pkg.versions = [entry, ...pkg.versions.filter((v) => v.version !== version)];
+
+          writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+          EOF
+
+          source_url="https://github.com/$REPOSITORY/releases/download/$TAG/$ZIP_NAME"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            node "$RUNNER_TEMP/update-manifest.mjs" \
+              "$MANIFEST_PATH" \
+              "$VERSION" \
+              "$CHANGELOG" \
+              "$TARGET_ABI" \
+              "$source_url" \
+              "$CHECKSUM" \
+              "$TIMESTAMP"
+
+            if git diff --quiet -- "$MANIFEST_PATH"; then
+              echo "$MANIFEST_PATH already lists $VERSION; nothing to push."
+              exit 0
+            fi
+
+            git add "$MANIFEST_PATH"
+            git commit -m "Publish plugin $VERSION to the Jellyfin repository manifest [skip ci]"
+
+            if git push origin HEAD:main; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+
+            echo "Push rejected, main moved. Retrying."
+            sleep $((attempt * 5))
+          done
+
+          echo "::error::Could not push the manifest update to main after 5 attempts."
+          exit 1
