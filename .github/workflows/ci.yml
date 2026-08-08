@@ -11,9 +11,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  test:
-    name: test
+  # The Next.js site and the shared `lib/` algorithm. Also typechecks the
+  # plugin's browser sources: tsconfig.json globs `**/*.ts` from the repo root,
+  # so jellyfin-plugin/web/ and jellyfin-plugin/e2e/ are covered here.
+  web:
+    name: web
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -33,7 +39,68 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Unit + golden tests
+        # Vitest only. Its `include` globs cover lib/, test/ and
+        # jellyfin-plugin/web/src/, so the Playwright specs in
+        # jellyfin-plugin/e2e/ are not picked up. Those need a Docker Jellyfin
+        # server and stay local-only; see jellyfin-plugin/docker/README.md.
         run: npm test
 
       - name: Production build
         run: npm run build
+
+  # The C# Jellyfin plugin. Independent of the web job on purpose: neither can
+  # break the other's build, so they run in parallel and fail independently.
+  plugin:
+    name: plugin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: jellyfin-plugin
+    env:
+      DOTNET_NOLOGO: 1
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          # 9.0.x, not 10: the plugin targets net9.0 because that is what
+          # Jellyfin 10.11 runs on, and Jellyfin.Plugin.SubtitleSync.sln is a
+          # classic `.sln` (not the `.slnx` SDK 10 defaults to) so that a 9.0.1xx
+          # SDK can still open it. Do not "modernise" either half of that.
+          # ubuntu-latest already ships a 9.0.3xx SDK; this pins it so an image
+          # refresh cannot quietly move us off .NET 9.
+          dotnet-version: 9.0.x
+
+      # Node is load-bearing for the *C#* build: the csproj's BuildWebBundle
+      # target shells out to `node jellyfin-plugin/web/build.mjs` to produce the
+      # esbuild bundle it embeds as a resource. Without this the build fails
+      # with "node_modules is missing or incomplete (no esbuild)".
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        # Repo root, not jellyfin-plugin: esbuild is a root devDependency and
+        # the bundle imports lib/ directly. `npm install` rather than `npm ci`
+        # for the same reason as the web job - the lockfile is generated on
+        # Windows and omits Linux-only optional deps.
+        working-directory: .
+        run: npm install --no-audit --no-fund
+
+      # No NuGet cache step on purpose: a cold restore of this solution takes
+      # about 4 seconds, which is not worth a cache key to maintain.
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build (Release)
+        # The plugin csproj sets TreatWarningsAsErrors with
+        # AnalysisMode=AllEnabledByDefault, so this is the lint step too.
+        run: dotnet build -c Release --no-restore
+
+      - name: Tests
+        # Release, --no-build: exercise the exact assemblies built above rather
+        # than triggering a second Debug build.
+        run: dotnet test -c Release --no-build

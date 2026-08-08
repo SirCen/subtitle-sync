@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Subtitle Sync</title>
+  </head>
+  <body>
+    <!--
+      Deliberately minimal. The real sync UI is issue #12; this exists so the
+      plugin has a reachable, working settings page from day one.
+
+      Jellyfin injects this fragment into its own shell, so there is no styling
+      of our own here: the emby-* classes are the client's.
+    -->
+    <div
+      id="subtitleSyncConfigPage"
+      data-role="page"
+      class="page type-interior pluginConfigurationPage"
+      data-require="emby-input,emby-button,emby-checkbox"
+    >
+      <div data-role="content">
+        <div class="content-primary">
+          <h2>Subtitle Sync</h2>
+
+          <!--
+            The Subtitles-menu item (#13) needs a third-party plugin, and
+            Jellyfin 10.11 has no dependency mechanism to install it for us - a
+            `dependencies` array in a repository manifest is silently discarded.
+            So this is the only place an administrator can find out why the menu
+            item is or is not there.
+
+            Hidden unless there is something to say. This is a note, not a nag:
+            the Dashboard link below is the primary route to the sync page and
+            works whether or not File Transformation is installed.
+          -->
+          <div id="fileTransformationNotice" class="verticalSection hide">
+            <div id="fileTransformationDetail" class="fieldDescription"></div>
+            <div id="fileTransformationHowTo" class="fieldDescription hide">
+              To add it: Dashboard &gt; Plugins &gt; Repositories &gt; add
+              <code id="fileTransformationRepo"></code>, then install
+              <span id="fileTransformationName"></span> from the catalogue and
+              restart the server. Its source and its own notes are at
+              <a
+                id="fileTransformationProject"
+                is="emby-linkbutton"
+                class="button-link emby-button"
+                target="_blank"
+                rel="noopener noreferrer"
+                href="#"
+              ></a
+              >.
+            </div>
+            <div class="fieldDescription">
+              It patches the Jellyfin server at runtime and is not maintained by
+              this project, so it can break on a Jellyfin update. Nothing else
+              here depends on it.
+            </div>
+          </div>
+
+          <!--
+            The way in. Dashboard is the PRIMARY route to the sync page, not a
+            fallback: the Subtitles-menu item (#13) is injected by a third-party
+            plugin that patches the server at runtime and may not be installed,
+            so this link has to be the obvious one.
+          -->
+          <div class="verticalSection">
+            <a
+              id="openSyncPage"
+              is="emby-linkbutton"
+              class="raised button-submit block emby-button"
+              href="#/configurationpage?name=SubtitleSyncPage"
+            >
+              <span>Sync a subtitle track</span>
+            </a>
+            <div class="fieldDescription">
+              Pick a film or episode, choose the track that drifts, and re-time
+              it against the audio. The analysis runs in this browser.
+            </div>
+          </div>
+
+          <form id="subtitleSyncConfigForm">
+            <h3>Settings</h3>
+
+            <div class="checkboxContainer checkboxContainerWithDescription">
+              <label class="emby-checkbox-label">
+                <input id="overwriteOriginal" type="checkbox" is="emby-checkbox" />
+                <span>Overwrite the original subtitle file</span>
+              </label>
+              <div class="fieldDescription checkboxFieldDescription">
+                Off by default. When off, a synced track is written alongside the
+                original as &lt;base&gt;.&lt;lang&gt;.synced.srt and nothing is
+                destroyed.
+              </div>
+            </div>
+
+            <div class="checkboxContainer checkboxContainerWithDescription">
+              <label class="emby-checkbox-label">
+                <input id="enableSignalCache" type="checkbox" is="emby-checkbox" />
+                <span>Cache analysed speech signals on the server</span>
+              </label>
+              <div class="fieldDescription checkboxFieldDescription">
+                Lets a repeat sync of the same file skip the audio decode. A miss
+                costs roughly 115 MB of audio per hour of runtime; the signal it
+                produces is about 45 KB per hour.
+              </div>
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="signalCacheSizeLimitMb">
+                Speech signal cache limit (MB)
+              </label>
+              <input
+                id="signalCacheSizeLimitMb"
+                type="number"
+                is="emby-input"
+                min="0"
+                step="1"
+              />
+              <div class="fieldDescription">Zero means no limit.</div>
+            </div>
+
+            <div>
+              <button is="emby-button" type="submit" class="raised button-submit block emby-button">
+                <span>Save</span>
+              </button>
+            </div>
+          </form>
+
+          <!--
+            Outside the form on purpose. Clearing is an immediate side effect on
+            the server, not a setting, so it must not be reachable by pressing
+            Enter in the number field above.
+          -->
+          <div class="verticalSection">
+            <h3>Cached speech signals</h3>
+            <div id="signalCacheReadout" class="fieldDescription">Loading...</div>
+            <div id="signalCacheDirectory" class="fieldDescription"></div>
+            <div>
+              <button
+                id="clearSignalCache"
+                is="emby-button"
+                type="button"
+                class="raised block emby-button"
+              >
+                <span>Clear cache</span>
+              </button>
+            </div>
+            <div class="fieldDescription">
+              Everything cleared here has to be re-analysed by the next browser
+              that syncs the file, which means downloading its audio again.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <script type="text/javascript">
+        (function () {
+          var pluginId = '96d55013-3cf0-465e-9036-7fb73dd47f71';
+
+          function formatBytes(bytes) {
+            if (bytes < 1024) {
+              return bytes + ' B';
+            }
+
+            var units = ['KB', 'MB', 'GB'];
+            var value = bytes / 1024;
+            var unit = 0;
+            while (value >= 1024 && unit < units.length - 1) {
+              value /= 1024;
+              unit++;
+            }
+
+            return value.toFixed(1) + ' ' + units[unit];
+          }
+
+          function renderCacheStats(page, stats) {
+            var entries = stats.EntryCount === 1 ? '1 signal' : stats.EntryCount + ' signals';
+            var limit =
+              stats.SizeLimitBytes > 0
+                ? ' of a ' + formatBytes(stats.SizeLimitBytes) + ' limit'
+                : ' (no limit set)';
+
+            page.querySelector('#signalCacheReadout').textContent =
+              entries + ', using ' + formatBytes(stats.TotalBytes) + limit + '.';
+            page.querySelector('#signalCacheDirectory').textContent = stats.Directory;
+          }
+
+          function loadCacheStats(page) {
+            return ApiClient.getJSON(ApiClient.getUrl('SubtitleSync/Cache/Stats')).then(
+              function (stats) {
+                renderCacheStats(page, stats);
+              },
+              function () {
+                page.querySelector('#signalCacheReadout').textContent =
+                  'The cache could not be read.';
+              }
+            );
+          }
+
+          function clearCache(page) {
+            Dashboard.showLoadingMsg();
+            // Clear returns the stats it left behind, so the readout refreshes
+            // from the same response rather than from a second round trip that
+            // could disagree with it.
+            ApiClient.ajax({
+              type: 'POST',
+              url: ApiClient.getUrl('SubtitleSync/Cache/Clear'),
+              dataType: 'json',
+            }).then(
+              function (stats) {
+                renderCacheStats(page, stats);
+                Dashboard.hideLoadingMsg();
+              },
+              function () {
+                Dashboard.hideLoadingMsg();
+                Dashboard.alert('The cache could not be cleared.');
+              }
+            );
+          }
+
+          /**
+           * Shows why the Subtitles menu item is or is not there.
+           *
+           * Deliberately silent in the working case. The only states worth a
+           * paragraph are the ones where the administrator has something to do
+           * about it, or where they installed the dependency and it is not
+           * working - which is the state a naive "is the item there?" check
+           * would report as "not installed" and send them round in circles.
+           */
+          function renderInjectionStatus(page, status) {
+            var notice = page.querySelector('#fileTransformationNotice');
+            var howTo = page.querySelector('#fileTransformationHowTo');
+
+            if (!notice) {
+              return;
+            }
+
+            if (status.MenuItemActive) {
+              notice.classList.add('hide');
+              return;
+            }
+
+            page.querySelector('#fileTransformationDetail').textContent =
+              status.Detail ||
+              status.PluginName + ' is not available, so the Subtitles menu item will not appear.';
+
+            page.querySelector('#fileTransformationRepo').textContent = status.RepositoryUrl;
+            page.querySelector('#fileTransformationName').textContent = status.PluginName;
+
+            var project = page.querySelector('#fileTransformationProject');
+            project.href = status.ProjectUrl;
+            project.textContent = status.ProjectUrl;
+
+            // "Install it" is only advice worth giving when it is not installed.
+            // If it is installed and still not working, saying that would be
+            // wrong and confusing.
+            howTo.classList.toggle('hide', status.Availability !== 'NotInstalled');
+
+            notice.classList.remove('hide');
+          }
+
+          function loadInjectionStatus(page) {
+            return ApiClient.getJSON(ApiClient.getUrl('SubtitleSync/Status')).then(
+              function (status) {
+                renderInjectionStatus(page, status);
+              },
+              function () {
+                // An unreachable status endpoint says nothing useful about the
+                // menu item, so it says nothing at all.
+                page.querySelector('#fileTransformationNotice').classList.add('hide');
+              }
+            );
+          }
+
+          function load(page) {
+            Dashboard.showLoadingMsg();
+            ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+              page.querySelector('#overwriteOriginal').checked = !!config.OverwriteOriginal;
+              page.querySelector('#enableSignalCache').checked = !!config.EnableSignalCache;
+              page.querySelector('#signalCacheSizeLimitMb').value =
+                config.SignalCacheSizeLimitMb;
+              Dashboard.hideLoadingMsg();
+            });
+
+            loadCacheStats(page);
+            loadInjectionStatus(page);
+          }
+
+          function save(page) {
+            Dashboard.showLoadingMsg();
+            ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+              config.OverwriteOriginal = page.querySelector('#overwriteOriginal').checked;
+              config.EnableSignalCache = page.querySelector('#enableSignalCache').checked;
+              config.SignalCacheSizeLimitMb =
+                parseInt(page.querySelector('#signalCacheSizeLimitMb').value, 10) || 0;
+
+              ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                Dashboard.processPluginConfigurationUpdateResult(result);
+                // A lowered limit is only applied on the next write, so the
+                // readout is refreshed rather than assumed unchanged.
+                loadCacheStats(page);
+              });
+            });
+          }
+
+          document
+            .querySelector('#subtitleSyncConfigPage')
+            .addEventListener('pageshow', function () {
+              load(this);
+            });
+
+          document
+            .querySelector('#clearSignalCache')
+            .addEventListener('click', function () {
+              clearCache(document.querySelector('#subtitleSyncConfigPage'));
+            });
+
+          document
+            .querySelector('#subtitleSyncConfigForm')
+            .addEventListener('submit', function (e) {
+              save(document.querySelector('#subtitleSyncConfigPage'));
+              e.preventDefault();
+              return false;
+            });
+        })();
+      </script>
+    </div>
+  </body>
+</html>

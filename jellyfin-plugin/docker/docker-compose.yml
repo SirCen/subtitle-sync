@@ -1,0 +1,70 @@
+# Local Jellyfin 10.11 server for plugin smoke tests.
+#
+# Run this from `jellyfin-plugin/docker/` (or via `npm run jf:up` from the repo
+# root, which seeds the library and completes the startup wizard for you).
+#
+#   docker compose up -d
+#
+# Tag is pinned deliberately. `latest` on jellyfin/jellyfin currently points at
+# the 12.0 pre-release line, which is NOT what this plugin targets.
+
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:10.11.11
+    container_name: subtitle-sync-jellyfin
+    restart: "no"
+    ports:
+      - "${JELLYFIN_PORT:-8096}:8096"
+    environment:
+      # Jellyfin's own advertised address. Keeps the web client from trying to
+      # bounce the browser harness to a LAN IP it cannot reach.
+      JELLYFIN_PublishedServerUrl: "http://127.0.0.1:${JELLYFIN_PORT:-8096}"
+    volumes:
+      # Server state. Named volumes so `docker compose down -v` gives a clean
+      # first-run server again, which is what the setup script assumes.
+      - jellyfin-config:/config
+      - jellyfin-cache:/cache
+
+      # Seeded library, generated from test/fixtures by scripts/seed-library.mjs.
+      # Read-write on purpose: the full-sync smoke test writes a sibling .srt.
+      - ./media:/media
+
+      # Plugin drop point. The plugin build output does not exist yet (see #3),
+      # so we mount a committed staging directory rather than a bin/ path that
+      # would be created root-owned by the daemon on first `up`.
+      #
+      # Once the C# project lands, the flow is:
+      #   dotnet publish -c Release
+      #   cp <publish-output>/*.dll jellyfin-plugin/docker/plugins/SubtitleSync/
+      #   docker compose restart jellyfin
+      #
+      # An empty staging directory is harmless: Jellyfin logs "no assemblies"
+      # and carries on, so every non-plugin smoke test still runs today.
+      - ./plugins/SubtitleSync:/config/plugins/SubtitleSync
+
+      # The File Transformation plugin (#13), which injects our Subtitles-menu
+      # script into the web client. A separate mount rather than a checked-in
+      # copy: it is third-party, and scripts/file-transformation.mjs downloads
+      # the exact build for this Jellyfin tag and verifies the manifest's
+      # checksum before unpacking it here.
+      #
+      # Empty by default and harmless empty, exactly like the mount above.
+      # `npm run jf:ft:uninstall` empties it again, which is how the
+      # "everything still works without it" path is checked.
+      - ./plugins/FileTransformation:/config/plugins/FileTransformation
+    healthcheck:
+      # /System/Info/Public needs no auth and is served before the wizard is
+      # completed, so it is a genuine "web server is answering" probe.
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:8096/System/Info/Public >/dev/null || exit 1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+volumes:
+  jellyfin-config:
+  jellyfin-cache:

@@ -1,0 +1,170 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Jellyfin 10.11 runs on net9.0 (Jellyfin.Server/Jellyfin.Server.csproj at v10.11.11). -->
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Jellyfin.Plugin.SubtitleSync</RootNamespace>
+    <AssemblyName>Jellyfin.Plugin.SubtitleSync</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>false</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>NU1902;NU1903</WarningsNotAsErrors>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!--
+      CA1724: "the type name Plugin conflicts with the namespace Jellyfin.Plugin".
+      Unavoidable. Jellyfin's plugin assemblies are conventionally named
+      Jellyfin.Plugin.* and the entry point is conventionally called Plugin.
+    -->
+    <NoWarn>$(NoWarn);CA1724</NoWarn>
+
+    <!-- Kept in step with the repository manifest version (issue #15). -->
+    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      ExcludeAssets=runtime keeps the server's own assemblies out of the plugin
+      output. The server already has them loaded; shipping copies is how you get
+      type-identity failures at load time.
+    -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.11">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="Jellyfin.Model" Version="10.11.11">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+
+    <!--
+      Needed by issue #13: the File Transformation plugin's RegisterTransformation
+      takes a Newtonsoft.Json.Linq.JObject, so we have to be able to build one.
+
+      ExcludeAssets=runtime, and this one is load-bearing rather than tidiness.
+      Jellyfin loads each plugin into its own AssemblyLoadContext that resolves
+      from the plugin's own directory first. Ship a copy of Newtonsoft.Json
+      beside our DLL and we get OUR JObject type, while File Transformation -
+      which ships no copy and binds to the server's own
+      /jellyfin/Newtonsoft.Json.dll - expects THEIRS. Same name, same version,
+      different type identity: the reflected call fails with an argument
+      mismatch and the menu item silently never appears. Excluding the runtime
+      asset makes both of us bind to the server's copy, which is exactly what
+      every plugin in File Transformation's own ecosystem does.
+    -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The index.html transformation's seams - the pure Inject(), the marker, the
+      callback triple - are internal because nothing outside this assembly should
+      call them, but they are exactly what needs testing: this code runs inside a
+      third-party plugin's request pipeline and its failure modes are invisible
+      from the outside. The alternative is widening the public API of a plugin to
+      suit its tests.
+    -->
+    <InternalsVisibleTo Include="Jellyfin.Plugin.SubtitleSync.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Configuration\configPage.html" />
+    <EmbeddedResource Include="Configuration\configPage.html" />
+    <None Remove="Configuration\syncPage.html" />
+    <EmbeddedResource Include="Configuration\syncPage.html" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!--
+      Forward slashes throughout, deliberately. MSBuild normalises separators in
+      item Include specs, but NOT inside plain property strings, Exec commands or
+      Exists() checks. On Windows a backslash here works and on Linux it is a
+      literal character in the filename, so `web\build.mjs` builds fine on a dev
+      machine and fails on a CI runner with "Cannot find module". Forward slashes
+      work on both.
+    -->
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</RepoRoot>
+    <WebProjectDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../web'))</WebProjectDir>
+    <WebBundlePath>$(WebProjectDir)/dist/subtitleSync.js</WebBundlePath>
+    <WebPageBundlePath>$(WebProjectDir)/dist/subtitleSyncPage.js</WebPageBundlePath>
+    <WebInjectBundlePath>$(WebProjectDir)/dist/subtitleSyncInject.js</WebInjectBundlePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The browser bundle of lib/, produced by jellyfin-plugin/web/build.mjs and
+      served through IHasWebPages. LogicalName is set explicitly because the file
+      lives outside the C# project directory: without it the manifest resource
+      name would be derived from the relative path and would not match the
+      EmbeddedResourcePath in Plugin.cs.
+
+      The file need not exist at evaluation time; BuildWebBundle below creates it
+      before PrepareResources runs.
+    -->
+    <EmbeddedResource Include="$(WebBundlePath)"
+                      LogicalName="Jellyfin.Plugin.SubtitleSync.Web.subtitleSync.js" />
+
+    <!--
+      The sync page's own UI (#12), built from the same run of build.mjs. Kept a
+      separate resource rather than folded into the bundle above so the page can
+      be served on its own, after the shared algorithm it depends on has loaded.
+    -->
+    <EmbeddedResource Include="$(WebPageBundlePath)"
+                      LogicalName="Jellyfin.Plugin.SubtitleSync.Web.subtitleSyncPage.js" />
+
+    <!--
+      The Subtitles-menu script (#13). Unlike the other two this is never served
+      over HTTP: Injection/IndexHtmlTransformation.cs reads it out of the
+      assembly and inlines it into /web/index.html. Embedding it rather than
+      serving it means the script can never be a stale cached copy of an older
+      build, and costs one fewer request on every page load of the web client.
+    -->
+    <EmbeddedResource Include="$(WebInjectBundlePath)"
+                      LogicalName="Jellyfin.Plugin.SubtitleSync.Web.subtitleSyncInject.js" />
+  </ItemGroup>
+
+  <!--
+    Rebuild the bundle on every build, deliberately without Inputs/Outputs.
+    esbuild takes well under a second, and the failure mode we are avoiding - a
+    DLL that silently embeds a bundle older than lib/ - is far more expensive
+    than that. lib/ is the single source of truth; the assembly must never carry
+    a stale copy of it.
+  -->
+  <Target Name="BuildWebBundle" BeforeTargets="BeforeBuild" Condition="'$(SkipWebBundle)' != 'true'">
+    <Exec Command="node --version"
+          WorkingDirectory="$(RepoRoot)"
+          ContinueOnError="true"
+          IgnoreExitCode="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low">
+      <Output TaskParameter="ExitCode" PropertyName="NodeExitCode" />
+    </Exec>
+
+    <Error Condition="'$(NodeExitCode)' != '0'"
+           Text="Node.js is required to build this plugin: the browser bundle of lib/ is embedded in the assembly. Install Node 20+ and re-run, or pass -p:SkipWebBundle=true to build against an existing $(WebBundlePath) (never do that in CI or a release)." />
+
+    <Error Condition="!Exists('$(RepoRoot)/node_modules/esbuild/package.json')"
+           Text="node_modules is missing or incomplete (no esbuild) under $(RepoRoot). Run `npm install` in the repository root before building this plugin." />
+
+    <Exec Command="node &quot;$(WebProjectDir)/build.mjs&quot;" WorkingDirectory="$(RepoRoot)" />
+  </Target>
+
+  <!--
+    Last line of defence. If the bundle is absent the compiler's own error is an
+    unhelpful CS1566 about a missing resource file, so say what actually went
+    wrong. Runs even when SkipWebBundle short-circuits the target above.
+  -->
+  <Target Name="VerifyWebBundle" AfterTargets="BuildWebBundle" BeforeTargets="PrepareResources">
+    <Error Condition="!Exists('$(WebBundlePath)')"
+           Text="The browser bundle $(WebBundlePath) does not exist. Run `npm run plugin:bundle` from $(RepoRoot)." />
+    <Error Condition="!Exists('$(WebPageBundlePath)')"
+           Text="The sync page bundle $(WebPageBundlePath) does not exist. Run `npm run plugin:bundle` from $(RepoRoot)." />
+    <Error Condition="!Exists('$(WebInjectBundlePath)')"
+           Text="The injected menu-item bundle $(WebInjectBundlePath) does not exist. Run `npm run plugin:bundle` from $(RepoRoot)." />
+  </Target>
+
+</Project>

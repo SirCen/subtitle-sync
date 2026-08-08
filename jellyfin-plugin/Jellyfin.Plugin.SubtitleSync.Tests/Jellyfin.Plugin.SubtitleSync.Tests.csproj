@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>false</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>NU1902;NU1903</WarningsNotAsErrors>
+
+    <!--
+      Targets net9.0 to match the plugin, but the test host has to be able to run
+      on whatever shared runtime the developer or CI box has. Without this, a
+      machine with only the .NET 10 runtime installed fails at `dotnet test` with
+      "You must install .NET 9.0".
+    -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The plugin project sets ExcludeAssets=runtime on these so the server's own
+      assemblies are not shipped in the plugin zip. That means they do not flow
+      here transitively either, and loading the Plugin type would throw. Referenced
+      again without the exclusion so the test host has them on disk.
+    -->
+    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" />
+    <PackageReference Include="Jellyfin.Model" Version="10.11.11" />
+
+    <!--
+      Same story as above, for the same reason. The plugin project excludes
+      Newtonsoft.Json's runtime asset so that it binds to the server's copy at
+      run time rather than shipping a second one into its own load context (see
+      the comment in Jellyfin.Plugin.SubtitleSync.csproj). Nothing gives the test
+      host a copy, so it is asked for here.
+    -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Jellyfin.Plugin.SubtitleSync\Jellyfin.Plugin.SubtitleSync.csproj" />
+  </ItemGroup>
+
+</Project>

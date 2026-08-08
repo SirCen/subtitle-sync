@@ -1,0 +1,434 @@
+using System;
+using System.ComponentModel.DataAnnotations;
+using System.Globalization;
+using System.Linq;
+using System.Net.Mime;
+using System.Threading;
+using System.Threading.Tasks;
+using Jellyfin.Plugin.SubtitleSync.MediaEncoding;
+using Jellyfin.Plugin.SubtitleSync.SignalCache;
+using MediaBrowser.Common.Api;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.MediaEncoding;
+using MediaBrowser.Model.IO;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+
+namespace Jellyfin.Plugin.SubtitleSync.Api;
+
+/// <summary>
+/// Read-only endpoints backing the plugin's sync page: what tracks does this
+/// item have, and give me one of them as SRT.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Controllers are auto-discovered - the server adds every plugin assembly as
+/// an MVC application part - so nothing here needs registering. It is resolved
+/// from the DI container, and every service it takes is a core singleton
+/// (<c>Emby.Server.Implementations/ApplicationHost.cs</c> at v10.11.11), so no
+/// <c>IPluginServiceRegistrator</c> entry is required either.
+/// </para>
+/// <para>
+/// The policy is <see cref="Policies.SubtitleManagement"/>, the same permission
+/// Jellyfin gates its own "Edit subtitles" affordance on. Not
+/// <c>RequiresElevation</c>: these two endpoints only read, and the users who
+/// can already manage subtitles are exactly the set the injected menu item is
+/// shown to. The write path (#8) is gated harder, separately.
+/// </para>
+/// </remarks>
+[ApiController]
+[Authorize(Policy = Policies.SubtitleManagement)]
+[Route("SubtitleSync")]
+public partial class SubtitleSyncItemController : ControllerBase
+{
+    /// <summary>
+    /// The output format asked of <see cref="ISubtitleEncoder"/>.
+    /// <c>MediaBrowser.Model.MediaInfo.SubtitleFormat.SRT</c>.
+    /// </summary>
+    private const string SrtFormat = "srt";
+
+    /// <summary>
+    /// SRT has no registered media type. <c>text/plain</c> keeps it readable in
+    /// a browser and in curl, and the page reads it with <c>response.text()</c>
+    /// either way. The charset is explicit because the encoder always writes
+    /// UTF-8, whatever the source file's encoding was.
+    /// </summary>
+    private const string SrtContentType = "text/plain; charset=utf-8";
+
+    private readonly ILibraryManager _libraryManager;
+    private readonly IMediaSourceManager _mediaSourceManager;
+    private readonly ISubtitleEncoder _subtitleEncoder;
+    private readonly IFileSystem _fileSystem;
+    private readonly ILogger<SubtitleSyncItemController> _logger;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SubtitleSyncItemController"/> class.
+    /// </summary>
+    /// <param name="libraryManager">Resolves an item id, honouring what the user may see.</param>
+    /// <param name="mediaSourceManager">Lists an item's versions and their streams.</param>
+    /// <param name="subtitleEncoder">Converts a track to SRT, external or embedded.</param>
+    /// <param name="fileSystem">Reads the media file's length and modification time, for the cache key.</param>
+    /// <param name="logger">Logger.</param>
+    public SubtitleSyncItemController(
+        ILibraryManager libraryManager,
+        IMediaSourceManager mediaSourceManager,
+        ISubtitleEncoder subtitleEncoder,
+        IFileSystem fileSystem,
+        ILogger<SubtitleSyncItemController> logger)
+    {
+        _libraryManager = libraryManager;
+        _mediaSourceManager = mediaSourceManager;
+        _subtitleEncoder = subtitleEncoder;
+        _fileSystem = fileSystem;
+        _logger = logger;
+    }
+
+    /// <summary>
+    /// Describes an item's media versions, audio tracks and subtitle tracks.
+    /// </summary>
+    /// <param name="itemId">The item to describe.</param>
+    /// <returns>The item description.</returns>
+    /// <response code="200">The item was found and described.</response>
+    /// <response code="400">The item is not a playable video, for example a series or a season.</response>
+    /// <response code="404">No such item, or the user cannot see it.</response>
+    [HttpGet("Item/{itemId}")]
+    [Produces(MediaTypeNames.Application.Json)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<ItemResponse> GetItem([FromRoute, Required] Guid itemId)
+    {
+        var item = FindItem(itemId);
+        if (item is null)
+        {
+            return NotFoundItem(itemId);
+        }
+
+        if (item is not Video video)
+        {
+            // A series or a season has no audio to analyse and no streams of its
+            // own. Saying so beats returning an empty track list, which reads
+            // like "this episode has no subtitles".
+            return Problem(
+                detail: string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"'{item.Name}' is a {item.GetType().Name}, which has no media of its own. Open a specific episode or movie."),
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Not a playable item");
+        }
+
+        // enablePathSubstitution false: we want the server's real paths, since
+        // the save step writes beside them.
+        var sources = _mediaSourceManager.GetStaticMediaSources(video, false);
+
+        var episode = item as MediaBrowser.Controller.Entities.TV.Episode;
+
+        var response = MediaStreamMapper.ToItem(
+            video.Id,
+            video.Name,
+            video.GetType().Name,
+            video.RunTimeTicks,
+            sources,
+            episode?.SeriesName,
+            video.ParentIndexNumber,
+            video.IndexNumber);
+
+        LogDescribedItem(
+            itemId,
+            response.MediaSources.Count,
+            response.MediaSources.Sum(s => s.SubtitleStreams.Count));
+
+        return response;
+    }
+
+    /// <summary>
+    /// Returns one subtitle track converted to SRT.
+    /// </summary>
+    /// <remarks>
+    /// Calls <see cref="ISubtitleEncoder"/> in process rather than proxying
+    /// Jellyfin's own <c>Videos/.../Stream.srt</c> endpoint. That endpoint
+    /// carries no <c>[Authorize]</c> attribute at all in 10.11, and proxying it
+    /// would mean a self-request with a token round-trip for something the DI
+    /// container already offers as a singleton. The encoder handles external
+    /// files and embedded streams the same way, extracting with ffmpeg when it
+    /// has to.
+    /// </remarks>
+    /// <param name="itemId">The item owning the track.</param>
+    /// <param name="index">The subtitle stream index, relative to its media source.</param>
+    /// <param name="mediaSourceId">
+    /// The media source the index belongs to. Optional, but send it: for an item
+    /// with several versions, omitting it takes the first source carrying that
+    /// index, which may not be the one the page is showing.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The track as SRT text.</returns>
+    /// <response code="200">The track was converted.</response>
+    /// <response code="400">The item is not a video, or the track is an image-based format that has no text.</response>
+    /// <response code="404">No such item or no such subtitle stream.</response>
+    [HttpGet("Subtitle/{itemId}")]
+    [Produces(SrtContentType)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> GetSubtitle(
+        [FromRoute, Required] Guid itemId,
+        [FromQuery, Required] int index,
+        [FromQuery] string? mediaSourceId,
+        CancellationToken cancellationToken)
+    {
+        var item = FindItem(itemId);
+        if (item is null)
+        {
+            return NotFoundItem(itemId);
+        }
+
+        if (item is not Video video)
+        {
+            return Problem(
+                detail: string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"'{item.Name}' is a {item.GetType().Name}, which has no media of its own."),
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Not a playable item");
+        }
+
+        var sources = _mediaSourceManager.GetStaticMediaSources(video, false);
+
+        if (!MediaStreamMapper.TryFindSubtitleStream(sources, mediaSourceId, index, out var source, out var stream)
+            || source is null
+            || stream is null)
+        {
+            return Problem(
+                detail: string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"No subtitle stream with index {index} on {MediaStreamMapper.DescribeSource(mediaSourceId)} of '{item.Name}'."),
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Subtitle stream not found");
+        }
+
+        // The same classification the item response already advertised. Checked
+        // again because a client is free to ask for anything, and because
+        // handing a PGS stream to the encoder wastes an ffmpeg run to arrive at
+        // a worse error.
+        var support = SubtitleCodecs.Classify(stream.Codec);
+        if (support == SubtitleTrackSupport.ImageBased)
+        {
+            return Problem(
+                detail: SubtitleCodecs.DescribeSupport(support, stream.Codec, stylingIsLost: false),
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Unsupported subtitle format");
+        }
+
+        LogConvertingStream(index, stream.Codec, stream.IsExternal, itemId);
+
+        // startTimeTicks 0 with endTimeTicks 0 means "the whole track": the
+        // encoder only filters events when an end time is given.
+        var srt = await _subtitleEncoder.GetSubtitles(
+                video,
+                source.Id,
+                index,
+                SrtFormat,
+                startTimeTicks: 0,
+                endTimeTicks: 0,
+                preserveOriginalTimestamps: true,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        return File(srt, SrtContentType);
+    }
+
+    /// <summary>
+    /// Reports the speech-signal cache key a given analysis would use.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Exists because the key covers the media file's length and last write time
+    /// (see <see cref="SignalCacheKeyInputs"/>), which the browser cannot see.
+    /// Without it the page has no way to ask <c>GET /SubtitleSync/Signal/{key}</c>
+    /// anything, so every run would fall through to the PCM stream - roughly
+    /// 115 MB per hour of runtime to rebuild a 45 KB signal the server may
+    /// already hold.
+    /// </para>
+    /// <para>
+    /// The media source and audio stream are resolved by the same
+    /// <see cref="PcmStreamPlanner"/> the PCM endpoint uses, so a key derived
+    /// here and the audio a later request decodes always describe the same
+    /// track. Deriving them independently is exactly how a cache serves one
+    /// stream's signal for another's audio.
+    /// </para>
+    /// </remarks>
+    /// <param name="itemId">The item to be analysed.</param>
+    /// <param name="mediaSourceId">Which version. Omit for the one Jellyfin plays by default.</param>
+    /// <param name="audioStreamIndex">Which audio track, as Jellyfin numbers it. Omit for the source's default.</param>
+    /// <param name="vadAggressiveness">The VAD mode the browser will run at, 0 to 3. Part of the identity: a different mode is a different signal.</param>
+    /// <returns>The cache key and the inputs it was resolved from.</returns>
+    /// <response code="200">The key.</response>
+    /// <response code="400">The requested source or audio stream is unusable, or the aggressiveness is out of range.</response>
+    /// <response code="404">No such item, or it has nothing to decode.</response>
+    [HttpGet("SignalKey/{itemId}")]
+    [Produces(MediaTypeNames.Application.Json)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<SignalKeyResponse> GetSignalKey(
+        [FromRoute, Required] Guid itemId,
+        [FromQuery] string? mediaSourceId,
+        [FromQuery] int? audioStreamIndex,
+        [FromQuery] int vadAggressiveness = 2)
+    {
+        if (vadAggressiveness is < 0 or > 3)
+        {
+            return Problem(
+                detail: "VAD aggressiveness must be 0, 1, 2 or 3.",
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid aggressiveness");
+        }
+
+        var item = FindItem(itemId);
+        if (item is null)
+        {
+            return NotFoundItem(itemId);
+        }
+
+        var plan = PcmStreamPlanner.Plan(
+            _mediaSourceManager.GetStaticMediaSources(item, false),
+            mediaSourceId,
+            audioStreamIndex);
+
+        if (!plan.Succeeded)
+        {
+            return plan.Failure switch
+            {
+                PcmStreamPlanFailure.NoMediaSource or PcmStreamPlanFailure.UnknownMediaSource
+                    => Problem(
+                        detail: plan.ErrorMessage,
+                        statusCode: StatusCodes.Status404NotFound,
+                        title: "Nothing to analyse"),
+                _ => Problem(
+                    detail: plan.ErrorMessage,
+                    statusCode: StatusCodes.Status400BadRequest,
+                    title: "Nothing to analyse"),
+            };
+        }
+
+        // The two filesystem facts are what make a replaced file miss rather
+        // than silently reuse the previous encode's signal.
+        var file = _fileSystem.GetFileInfo(plan.InputPath);
+        if (!file.Exists)
+        {
+            return Problem(
+                detail: string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"'{item.Name}' points at {plan.InputPath}, which this server cannot read, so no signal can be cached for it."),
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Media file unavailable");
+        }
+
+        var key = SignalCacheKey.Derive(new SignalCacheKeyInputs
+        {
+            ItemId = itemId.ToString("N", CultureInfo.InvariantCulture),
+            MediaSourceId = plan.MediaSourceId ?? string.Empty,
+            AudioStreamIndex = plan.AudioStreamIndex,
+            VadAggressiveness = vadAggressiveness,
+            FileLength = file.Length,
+            FileModifiedUtc = file.LastWriteTimeUtc,
+        });
+
+        LogDerivedSignalKey(itemId, plan.AudioStreamIndex, vadAggressiveness);
+
+        return new SignalKeyResponse
+        {
+            Key = key,
+            MediaSourceId = plan.MediaSourceId,
+            AudioStreamIndex = plan.AudioStreamIndex,
+            VadAggressiveness = vadAggressiveness,
+        };
+    }
+
+    /// <summary>
+    /// Resolves an item id against what the caller is allowed to see.
+    /// </summary>
+    /// <remarks>
+    /// The rule itself lives in <see cref="ItemLookup"/> so that every endpoint
+    /// in the plugin gets the same one; see the remarks there for why a second
+    /// copy of it was a permission bypass.
+    /// </remarks>
+    /// <param name="itemId">The item id.</param>
+    /// <returns>The item, or null.</returns>
+    private BaseItem? FindItem(Guid itemId)
+        => ItemLookup.Find(_libraryManager, User, itemId, LogItemNotDeserializable);
+
+    /// <summary>
+    /// The 404 for an item that does not exist or is not visible. Deliberately
+    /// the same answer for both.
+    /// </summary>
+    /// <param name="itemId">The requested id.</param>
+    /// <returns>A 404 result.</returns>
+    private ObjectResult NotFoundItem(Guid itemId)
+        => Problem(
+            detail: string.Create(CultureInfo.InvariantCulture, $"No item with id {itemId:N} is available to you."),
+            statusCode: StatusCodes.Status404NotFound,
+            title: "Item not found");
+
+    /// <summary>
+    /// Logs the outcome of an item description.
+    /// </summary>
+    /// <remarks>
+    /// Source-generated rather than a plain <c>LogDebug</c> call because the
+    /// project builds with <c>AnalysisMode=AllEnabledByDefault</c>, and CA1848
+    /// wants the allocation-free delegate form.
+    /// </remarks>
+    /// <param name="itemId">The item.</param>
+    /// <param name="sourceCount">How many media versions it has.</param>
+    /// <param name="trackCount">How many subtitle tracks across all of them.</param>
+    [LoggerMessage(
+        EventId = 7001,
+        Level = LogLevel.Debug,
+        Message = "Described item {ItemId}: {SourceCount} media source(s), {TrackCount} subtitle track(s)")]
+    private partial void LogDescribedItem(Guid itemId, int sourceCount, int trackCount);
+
+    /// <summary>
+    /// Logs a conversion about to be handed to the subtitle encoder.
+    /// </summary>
+    /// <param name="index">The stream index.</param>
+    /// <param name="codec">The source codec.</param>
+    /// <param name="isExternal">Whether the track is a sidecar file.</param>
+    /// <param name="itemId">The item.</param>
+    [LoggerMessage(
+        EventId = 7002,
+        Level = LogLevel.Debug,
+        Message = "Converting subtitle stream {Index} ({Codec}, external={IsExternal}) of item {ItemId} to SRT")]
+    private partial void LogConvertingStream(int index, string? codec, bool isExternal, Guid itemId);
+
+    /// <summary>
+    /// Logs a library row the server could not turn back into an item.
+    /// </summary>
+    /// <param name="itemId">The item.</param>
+    /// <param name="exception">The repository failure.</param>
+    [LoggerMessage(
+        EventId = 7003,
+        Level = LogLevel.Warning,
+        Message = "Item {ItemId} exists in the library database but could not be deserialised; answering as not found")]
+    private partial void LogItemNotDeserializable(Guid itemId, Exception exception);
+
+    /// <summary>
+    /// Logs a cache key handed to the page.
+    /// </summary>
+    /// <remarks>
+    /// The key itself is deliberately absent. It is a hash of the item and the
+    /// file's metadata and there is nothing to learn from it in a log; what is
+    /// worth seeing is which track and mode were asked about, because a cache
+    /// that never hits is usually a page asking about a different one each time.
+    /// </remarks>
+    /// <param name="itemId">The item.</param>
+    /// <param name="audioStreamIndex">The resolved audio stream.</param>
+    /// <param name="vadAggressiveness">The VAD mode.</param>
+    [LoggerMessage(
+        EventId = 7004,
+        Level = LogLevel.Debug,
+        Message = "Derived a speech signal cache key for item {ItemId}, audio stream {AudioStreamIndex}, VAD mode {VadAggressiveness}")]
+    private partial void LogDerivedSignalKey(Guid itemId, int audioStreamIndex, int vadAggressiveness);
+}

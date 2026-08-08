@@ -1,0 +1,29 @@
+{
+  "_comment": "Single source of truth for the harness's knobs. Read by the Node scripts in scripts/*.mjs and by the Playwright specs in ../e2e/*.ts. It is JSON rather than a shared module because those two run under different loaders: Playwright transpiles .ts through its own pipeline and cannot import an ESM .mjs from this CommonJS package. Every value can be overridden by the matching env var listed below.",
+
+  "port": 8096,
+  "adminUsername": "harness",
+  "adminPassword": "harness-password",
+  "viewerUsername": "viewer",
+  "viewerPassword": "viewer-password",
+
+  "libraryName": "Harness Movies",
+  "movieFolder": "Sample Clip (2020)",
+  "movieName": "Sample Clip",
+
+  "_syncableComment": "The second seeded movie. Unlike Sample Clip - whose audio the VAD reads as ~92% speech, leaving nothing to correlate against - this one has a deliberate speech/silence pattern and its subtitle track is displaced by a known offset, so a sync run over it has a right answer to be checked against. No year in the folder name, unlike Sample Clip (2020): Jellyfin left the year in the resolved item Name for this folder (\"Structured Clip (2021)\") while stripping it for Sample Clip, and a name that depends on a resolver quirk is not something the specs should look up by. Without a year there is nothing to strip. See test/fixtures/PROVENANCE.md and issue #20.",
+  "syncableFolder": "Structured Clip",
+  "syncableName": "Structured Clip",
+  "syncableKnownOffset": -3.2,
+
+  "containerMediaRoot": "/media/movies",
+
+  "_env": {
+    "JELLYFIN_PORT": "port",
+    "JELLYFIN_URL": "overrides the whole base URL, default http://127.0.0.1:<port>",
+    "JELLYFIN_ADMIN_USER": "adminUsername",
+    "JELLYFIN_ADMIN_PASSWORD": "adminPassword",
+    "JELLYFIN_VIEWER_USER": "viewerUsername",
+    "JELLYFIN_VIEWER_PASSWORD": "viewerPassword"
+  }
+}

@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated esbuild output for the Jellyfin plugin (issue #10). Minified
+    // third-party code; linting it says nothing about this repository.
+    "jellyfin-plugin/web/dist/**",
   ]),
 ]);
 

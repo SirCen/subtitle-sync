@@ -42,6 +42,24 @@ golden parity test (see [Testing](#testing)).
   ratio list - each with a reset-to-default.
 - Order-independent drag-and-drop, 5 GB hard cap with a large-file warning.
 
+## Jellyfin plugin
+
+The same algorithm also ships as a **Jellyfin 10.11 plugin**, so you can re-time
+a track from inside your own server instead of downloading the video first. It
+analyses the audio of a film or episode in your browser and writes a corrected
+`<base>.<lang>.synced.srt` beside the media file; the original is left alone.
+
+- Source, build instructions and a local Docker test server:
+  [`jellyfin-plugin/`](jellyfin-plugin/README.md).
+- Install and usage docs: the site's `/plugin` page (behind
+  [`NEXT_PUBLIC_FEATURE_PLUGIN_PAGE`](#next_public_feature_plugin_page)).
+- Install by adding `https://subtitlesync.sircen.dev/jellyfin/manifest.json` as
+  a repository in Dashboard > Plugins, or drop a release zip in by hand.
+
+The plugin is a thin C# shell around the browser code: `lib/` stays the single
+source of truth and is bundled into the plugin, so the golden parity test covers
+what the plugin ships.
+
 ## Getting started
 
 ```bash
@@ -65,6 +83,56 @@ Open [http://localhost:3000](http://localhost:3000), drop in a video and its
 | `npm test` | Run the Vitest suite once |
 | `npm run test:watch` | Run Vitest in watch mode |
 | `npm run lint` | Lint |
+
+### Environment variables
+
+Copy [`.env.example`](.env.example) to `.env.local` (git-ignored) and edit it, or
+set the variables in your host's environment settings.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `NEXT_PUBLIC_FEATURE_PLUGIN_PAGE` | off | Set to `1` to show the **Plugin** nav link and the `/plugin` page |
+
+## Feature flags
+
+Flags live in [`lib/flags.ts`](lib/flags.ts), one exported predicate per flag,
+and are read from `NEXT_PUBLIC_*` environment variables.
+
+They **fail closed**: only the exact string `1` turns a flag on. Unset, empty,
+`0`, `true` or anything else leaves it off, so a typo hides a feature rather than
+publishing it.
+
+### `NEXT_PUBLIC_FEATURE_PLUGIN_PAGE`
+
+Gates the Jellyfin plugin documentation page.
+
+- **Off (default)** - the **Plugin** link is absent from the site nav, and
+  `/plugin` calls `notFound()`, so the route returns a 404.
+- **On (`1`)** - the nav link renders and `/plugin` serves the page.
+
+```bash
+# Turn it on locally
+echo 'NEXT_PUBLIC_FEATURE_PLUGIN_PAGE=1' >> .env.local
+npm run dev
+```
+
+### Known trade-off: hidden, not secret
+
+`NEXT_PUBLIC_` variables are **inlined at build time**, which has two
+consequences worth being explicit about:
+
+1. **Changing a flag requires a rebuild and redeploy.** The value is baked into
+   the bundle when `next build` runs; flipping the variable on a running
+   deployment does nothing.
+2. **The flag and the gated page ship to the browser.** The `/plugin` route
+   module is part of the client bundle whether or not the flag is on, so anyone
+   reading the JavaScript can see that the page exists and what it contains. The
+   page is **hidden, not secret**.
+
+This was chosen deliberately over a server-only variable: the flag gates public
+marketing-style documentation, not anything sensitive, and a build-time flag
+keeps the nav server-rendered with no client-side flicker. Anything that must
+actually stay private needs a server-only variable and a server-side check.
 
 ## Testing
 
@@ -105,8 +173,11 @@ configuration - import the repo and deploy.
 ```
 app/
   SubtitleSync.tsx   # the client UI + pipeline orchestration
+  layout.tsx         # root layout + server-rendered site nav
   page.tsx           # renders SubtitleSync
+  plugin/page.tsx    # feature-flagged Jellyfin plugin page (404s when off)
 lib/
+  flags.ts           # build-time feature flags
   types.ts           # shared pipeline contracts
   srt.ts             # SRT parse/write + time conversion
   sync.ts            # signal + cross-correlation + ratio/confidence

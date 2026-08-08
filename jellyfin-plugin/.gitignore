@@ -1,0 +1,15 @@
+# .NET build output. Scoped to jellyfin-plugin/ on purpose so the repo root
+# .gitignore stays a Next.js file.
+bin/
+obj/
+
+# Local plugin staging drop point for the Docker harness. The directory itself
+# is committed (with .gitkeep) because the compose bind mount needs it to exist;
+# the build output copied into it is not.
+docker/plugins/SubtitleSync/*
+!docker/plugins/SubtitleSync/.gitkeep
+
+# Same again for the File Transformation plugin (#13), which the harness
+# downloads rather than vendors. See docker/scripts/file-transformation.mjs.
+docker/plugins/FileTransformation/*
+!docker/plugins/FileTransformation/.gitkeep
