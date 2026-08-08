@@ -79,11 +79,19 @@
   </ItemGroup>
 
   <PropertyGroup>
-    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</RepoRoot>
-    <WebProjectDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\web'))</WebProjectDir>
-    <WebBundlePath>$(WebProjectDir)\dist\subtitleSync.js</WebBundlePath>
-    <WebPageBundlePath>$(WebProjectDir)\dist\subtitleSyncPage.js</WebPageBundlePath>
-    <WebInjectBundlePath>$(WebProjectDir)\dist\subtitleSyncInject.js</WebInjectBundlePath>
+    <!--
+      Forward slashes throughout, deliberately. MSBuild normalises separators in
+      item Include specs, but NOT inside plain property strings, Exec commands or
+      Exists() checks. On Windows a backslash here works and on Linux it is a
+      literal character in the filename, so `web\build.mjs` builds fine on a dev
+      machine and fails on a CI runner with "Cannot find module". Forward slashes
+      work on both.
+    -->
+    <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</RepoRoot>
+    <WebProjectDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../web'))</WebProjectDir>
+    <WebBundlePath>$(WebProjectDir)/dist/subtitleSync.js</WebBundlePath>
+    <WebPageBundlePath>$(WebProjectDir)/dist/subtitleSyncPage.js</WebPageBundlePath>
+    <WebInjectBundlePath>$(WebProjectDir)/dist/subtitleSyncInject.js</WebInjectBundlePath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -139,10 +147,10 @@
     <Error Condition="'$(NodeExitCode)' != '0'"
            Text="Node.js is required to build this plugin: the browser bundle of lib/ is embedded in the assembly. Install Node 20+ and re-run, or pass -p:SkipWebBundle=true to build against an existing $(WebBundlePath) (never do that in CI or a release)." />
 
-    <Error Condition="!Exists('$(RepoRoot)\node_modules\esbuild\package.json')"
+    <Error Condition="!Exists('$(RepoRoot)/node_modules/esbuild/package.json')"
            Text="node_modules is missing or incomplete (no esbuild) under $(RepoRoot). Run `npm install` in the repository root before building this plugin." />
 
-    <Exec Command="node &quot;$(WebProjectDir)\build.mjs&quot;" WorkingDirectory="$(RepoRoot)" />
+    <Exec Command="node &quot;$(WebProjectDir)/build.mjs&quot;" WorkingDirectory="$(RepoRoot)" />
   </Target>
 
   <!--
