@@ -72,15 +72,40 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// </remarks>
     public const string BundlePageName = "subtitleSync.js";
 
+    /// <summary>
+    /// Gets the page name under which the sync page's own UI bundle is served.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="BundlePageName"/> so the shared algorithm and
+    /// the user interface are two downloads: the first is 47 KB of lib/ plus
+    /// inline libfvad and changes rarely, the second is the page and changes
+    /// often. Loaded in that order by the bootstrap in <c>syncPage.html</c>,
+    /// because the page reads <c>window.SubtitleSync</c> at init time.
+    /// </remarks>
+    public const string PageBundlePageName = "subtitleSyncPage.js";
+
+    /// <summary>
+    /// Gets the page name of the sync UI itself.
+    /// </summary>
+    /// <remarks>
+    /// Reached at <c>/web/#/configurationpage?name=SubtitleSyncPage</c>, with an
+    /// optional <c>&amp;itemId=</c> for the injected Subtitles-menu item (#13).
+    /// Without one the page shows a library picker, which is the primary route:
+    /// the injection depends on a third-party plugin and cannot be relied on.
+    /// Deliberately not the plugin's display name - that name belongs to the
+    /// configuration page the Dashboard links to.
+    /// </remarks>
+    public const string SyncPageName = "SubtitleSyncPage";
+
     /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages()
     {
         var prefix = GetType().Namespace;
 
-        // EmbeddedResourcePath is the manifest resource name. For configPage.html
-        // that is the MSBuild default (<RootNamespace>.<folder>.<file>); for the
-        // bundle it is the LogicalName set in the csproj, because the file is
-        // generated outside the project directory.
+        // EmbeddedResourcePath is the manifest resource name. For the two HTML
+        // pages that is the MSBuild default (<RootNamespace>.<folder>.<file>);
+        // for the bundles it is the LogicalName set in the csproj, because those
+        // files are generated outside the project directory.
         return
         [
             new PluginPageInfo
@@ -90,8 +115,18 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             },
             new PluginPageInfo
             {
+                Name = SyncPageName,
+                EmbeddedResourcePath = prefix + ".Configuration.syncPage.html",
+            },
+            new PluginPageInfo
+            {
                 Name = BundlePageName,
                 EmbeddedResourcePath = prefix + ".Web.subtitleSync.js",
+            },
+            new PluginPageInfo
+            {
+                Name = PageBundlePageName,
+                EmbeddedResourcePath = prefix + ".Web.subtitleSyncPage.js",
             }
         ];
     }

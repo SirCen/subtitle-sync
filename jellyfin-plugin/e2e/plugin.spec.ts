@@ -13,7 +13,8 @@
  *   #3  scaffold the plugin           -> the two Dashboard tests
  *   #13 File Transformation injection -> the banner and Subtitles-menu tests
  *   #8  save endpoint                 -> the save block, live as of that issue
- *   #12 sync page UI                  -> the one remaining skipped sync run
+ *   #12 sync page UI                  -> the sync page block, live as of that
+ *                                        issue
  *
  * Selectors below are the current best guess at the 10.11 web client's DOM and
  * are expected to need adjustment when first run for real. That is the point of
@@ -28,6 +29,7 @@ import { expect, test, type Page } from "@playwright/test";
 import {
   adminSession,
   findFixtureItemId,
+  findSyncableItemId,
   getItem,
   gotoItemDetail,
   hostPathFor,
@@ -36,6 +38,8 @@ import {
   loginAsViewer,
   refreshItem,
   saveSyncedSubtitle,
+  SYNCABLE_KNOWN_OFFSET,
+  SYNCABLE_NAME,
   viewerSession,
   waitForSubtitleStreams,
 } from "./harness";
@@ -295,25 +299,207 @@ test.describe("plugin: saving a synced subtitle (#8)", () => {
     expect(result.detail).toContain("WebVTT");
   });
 
-  // STILL GATED ON #12 AND #13: the same run driven through the plugin's own
-  // sync page, with the analysis happening in the browser. There is no page to
-  // open yet, so there is nothing here a selector could find.
-  test.skip("a full sync run through the plugin page produces a sibling .srt", async ({
-    page,
-  }) => {
+});
+
+/**
+ * The end-to-end run, driven through the plugin's own page (#12).
+ *
+ * Deliberately against SYNCABLE_NAME rather than the Sample Clip the block
+ * above uses. Sample Clip reads as ~92% speech to the VAD, so a sync of it has
+ * no right answer to assert; Structured Clip's track is displaced by exactly
+ * SYNCABLE_KNOWN_OFFSET and the same recovery is asserted at the unit level by
+ * test/structured.test.ts. Asserting an offset against the wrong fixture passes
+ * vacuously.
+ */
+test.describe("plugin: the sync page (#12)", () => {
+  const SYNC_PAGE = "SubtitleSyncPage";
+
+  /** Files this block wrote into the seeded library, removed after each test. */
+  const written: string[] = [];
+
+  test.afterEach(async () => {
+    if (written.length === 0) return;
+
+    for (const containerPath of written.splice(0)) {
+      await rm(hostPathFor(containerPath), { force: true });
+    }
+
     const admin = await adminSession();
-    const itemId = await findFixtureItemId(admin);
+    const itemId = await findSyncableItemId(admin);
+    await refreshItem(admin, itemId);
+    await waitForSubtitleStreams(admin, itemId, (streams) => streams.length === 1);
+  });
+
+  test("the page opens from an item id and lists the item's tracks", async ({ page }) => {
+    const admin = await adminSession();
+    const itemId = await findSyncableItemId(admin);
 
     await loginAsAdmin(page);
-    await page.goto(`/web/#/configurationpage?name=SubtitleSync&itemId=${itemId}`);
+    await page.goto(`/web/#/configurationpage?name=${SYNC_PAGE}&itemId=${itemId}`);
 
-    await page.getByRole("button", { name: /sync/i }).first().click();
+    await expect(page.locator("#ssItemName")).toHaveText(SYNCABLE_NAME, { timeout: 60_000 });
+    // The picker is the other entry path and must be out of the way here.
+    await expect(page.locator("#ssPicker")).toBeHidden();
+    await expect(page.locator("#ssSubtitle option")).toHaveCount(1);
+    await expect(page.locator("#ssAudio option")).toHaveCount(1);
+    await expect(page.locator("#ssRun")).toBeEnabled();
+  });
 
-    // The analysis runs in the browser (VAD + lib/analyze), so this waits on the
-    // plugin's own completion signal rather than a fixed sleep.
-    await expect(page.getByText(/saved|complete/i).first()).toBeVisible({ timeout: 300_000 });
+  test("the page opens with no item id and finds one through the picker", async ({ page }) => {
+    await loginAsAdmin(page);
+    await page.goto(`/web/#/configurationpage?name=${SYNC_PAGE}`);
+
+    // This is the PRIMARY route: Dashboard > Plugins > Subtitle Sync, with no
+    // item in hand. It cannot be a stub - the injected menu item that supplies
+    // an itemId depends on a third-party plugin that may not be installed.
+    const search = page.locator("#ssSearch");
+    await expect(search).toBeVisible({ timeout: 60_000 });
+    await search.fill(SYNCABLE_NAME);
+
+    const result = page.locator("#ssPickerResults button", { hasText: SYNCABLE_NAME });
+    await expect(result).toBeVisible({ timeout: 30_000 });
+    await result.click();
+
+    await expect(page.locator("#ssItemName")).toHaveText(SYNCABLE_NAME);
+    await expect(page.locator("#ssRun")).toBeEnabled();
+  });
+
+  test("a full sync run through the plugin page produces a sibling .srt", async ({ page }) => {
+    const admin = await adminSession();
+    const itemId = await findSyncableItemId(admin);
+
+    const before = await getItem(admin, itemId);
+    const original = (before.MediaStreams ?? []).find((s) => s.Type === "Subtitle" && s.IsExternal);
+    expect(original?.Path, "the fixture should have its seeded external track").toBeTruthy();
+    const originalBytes = await readFile(hostPathFor(original!.Path!));
+
+    await loginAsAdmin(page);
+    await page.goto(`/web/#/configurationpage?name=${SYNC_PAGE}&itemId=${itemId}`);
+    await expect(page.locator("#ssRun")).toBeEnabled({ timeout: 60_000 });
+
+    await page.locator("#ssRun").click();
+
+    // The analysis runs in this browser - PCM from the server, VAD in wasm, then
+    // lib/analyze - so wait on the page's own completion rather than a sleep.
+    await expect(page.locator("#ssResult")).toBeVisible({ timeout: 300_000 });
+
+    // THE OFFSET IS THE POINT. The seeded track is displaced by exactly
+    // SYNCABLE_KNOWN_OFFSET, and the page reports what it recovered.
+    const recovered = Number(await page.locator("#ssNudgeOffset").inputValue());
+    expect(recovered).toBeCloseTo(SYNCABLE_KNOWN_OFFSET, 2);
+
+    await page.locator("#ssSave").click();
+    await expect(page.locator("#ssSaveNote")).toContainText(/^Saved /, { timeout: 60_000 });
 
     const streams = await waitForSubtitleStreams(admin, itemId, (s) => s.length > 1);
-    expect(streams.some((s) => s.Path?.includes(".synced.srt"))).toBe(true);
+    const saved = streams.find((s) => s.Path?.includes(".synced.srt"));
+    expect(saved?.Path, `no synced track appeared: ${JSON.stringify(streams)}`).toBeTruthy();
+    written.push(saved!.Path!);
+
+    // THE ORIGINAL IS UNTOUCHED.
+    expect(await readFile(hostPathFor(original!.Path!))).toEqual(originalBytes);
+
+    // And the file that landed really is the corrected one: every cue moved by
+    // the offset the page recovered, which is what "synced" has to mean.
+    const originalText = originalBytes.toString("utf8");
+    const savedText = await readFile(hostPathFor(saved!.Path!), "utf8");
+    const shift = firstCueStart(savedText) - firstCueStart(originalText);
+    expect(shift).toBeCloseTo(SYNCABLE_KNOWN_OFFSET, 1);
+  });
+
+  test("the saved file is offered as a download even without saving", async ({ page }) => {
+    const admin = await adminSession();
+    const itemId = await findSyncableItemId(admin);
+
+    await loginAsAdmin(page);
+    await page.goto(`/web/#/configurationpage?name=${SYNC_PAGE}&itemId=${itemId}`);
+    await expect(page.locator("#ssRun")).toBeEnabled({ timeout: 60_000 });
+    await page.locator("#ssRun").click();
+    await expect(page.locator("#ssResult")).toBeVisible({ timeout: 300_000 });
+
+    const download = page.waitForEvent("download");
+    await page.locator("#ssDownload").click();
+    expect((await download).suggestedFilename()).toMatch(/\.synced\.srt$/);
+  });
+
+  test("a nudge re-times the output without re-analysing", async ({ page }) => {
+    const admin = await adminSession();
+    const itemId = await findSyncableItemId(admin);
+
+    await loginAsAdmin(page);
+    await page.goto(`/web/#/configurationpage?name=${SYNC_PAGE}&itemId=${itemId}`);
+    await expect(page.locator("#ssRun")).toBeEnabled({ timeout: 60_000 });
+    await page.locator("#ssRun").click();
+    await expect(page.locator("#ssResult")).toBeVisible({ timeout: 300_000 });
+
+    const preview = page.locator("#ssPreview");
+    const detected = await preview.textContent();
+
+    // No request may leave the page for this: applyCorrection is pure.
+    let requests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/SubtitleSync/")) requests++;
+    });
+
+    await page.locator("#ssNudgeOffset").fill("-1.000");
+    await expect(preview).not.toHaveText(detected!);
+    expect(requests, "nudging must not talk to the server").toBe(0);
+  });
+
+  /**
+   * Saving is administrator-only while analysing is not, so a user who got a
+   * result may still be refused - and must be told, not left staring at a page
+   * that looks broken.
+   *
+   * The refusal is injected rather than driven as the viewer account because the
+   * 10.11 web client routes every plugin page behind an admin guard: a non-admin
+   * never reaches this page at all, whatever their subtitle permission.
+   */
+  test("a refused save explains itself and leaves the download working", async ({ page }) => {
+    const admin = await adminSession();
+    const itemId = await findSyncableItemId(admin);
+
+    await loginAsAdmin(page);
+    await page.route("**/SubtitleSync/Save/**", (route) =>
+      route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify({ title: "Forbidden" }),
+      }),
+    );
+
+    await page.goto(`/web/#/configurationpage?name=${SYNC_PAGE}&itemId=${itemId}`);
+    await expect(page.locator("#ssRun")).toBeEnabled({ timeout: 60_000 });
+    await page.locator("#ssRun").click();
+    await expect(page.locator("#ssResult")).toBeVisible({ timeout: 300_000 });
+
+    await page.locator("#ssSave").click();
+    await expect(page.locator("#ssSaveNote")).toContainText(/administrator/i);
+    await expect(page.locator("#ssDownload")).toBeEnabled();
+  });
+
+  /**
+   * The client's own route guard, asserted rather than assumed. It is the reason
+   * the Dashboard path is admin-only in practice however the server's
+   * SubtitleManagement policy is set, and the reason #13 cannot simply link a
+   * non-admin here.
+   */
+  test("a non-admin is bounced by the client before the page loads", async ({ page }) => {
+    const admin = await adminSession();
+    const itemId = await findSyncableItemId(admin);
+
+    await loginAsViewer(page);
+    await page.goto(`/web/#/configurationpage?name=${SYNC_PAGE}&itemId=${itemId}`);
+
+    await page.waitForURL(/#\/home/, { timeout: 60_000 });
+    await expect(page.locator("#subtitleSyncPage")).toHaveCount(0);
   });
 });
+
+/** Seconds of the first cue's start time in an SRT document. */
+function firstCueStart(srt: string): number {
+  const match = /(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->/.exec(srt);
+  if (!match) throw new Error("no cue found in the subtitle");
+  const [, h, m, s, ms] = match;
+  return Number(h) * 3600 + Number(m) * 60 + Number(s) + Number(ms) / 1000;
+}

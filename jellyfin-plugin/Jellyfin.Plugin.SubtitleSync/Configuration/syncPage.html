@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sync subtitles</title>
+  </head>
+  <body>
+    <!--
+      The sync page (issue #12). Two ways in, both of which must work:
+
+        /web/#/configurationpage?name=SubtitleSyncPage              item picker
+        /web/#/configurationpage?name=SubtitleSyncPage&itemId=...   straight in
+
+      The second is what the injected Subtitles-menu item (#13) uses; the first
+      is the primary path, because that injection depends on a third-party
+      plugin that Harmony-patches the server and can break on any point release.
+
+      Structure only. Every behaviour lives in the bundled TypeScript that the
+      bootstrap at the bottom loads - this file is what the server embeds and
+      the client injects, and neither of them is a good place to keep logic.
+
+      Jellyfin renders this fragment inside its own shell, so all classes here
+      are the client's own. It also runs the markup through translateHtml()
+      first, which expands dollar-brace placeholders into translated strings, so
+      NOTHING in this file may use a JavaScript template literal. The bundled
+      scripts are fetched by the browser and never see that pass, which is
+      another reason the logic lives there.
+    -->
+    <div
+      id="subtitleSyncPage"
+      data-role="page"
+      class="page type-interior pluginConfigurationPage"
+      data-require="emby-input,emby-button,emby-select,emby-checkbox"
+    >
+      <div data-role="content">
+        <div class="content-primary">
+          <h2 id="ssHeading">Sync subtitles</h2>
+
+          <div id="ssFatal" class="fieldDescription" style="display: none"></div>
+
+          <!-- ============================ Item picker ======================= -->
+          <div id="ssPicker" class="verticalSection" style="display: none">
+            <div class="fieldDescription" style="margin-bottom: 1.5em">
+              Choose the film or episode whose subtitles are out of step.
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="ssSearch">
+                Search the library
+              </label>
+              <input
+                id="ssSearch"
+                type="search"
+                is="emby-input"
+                autocomplete="off"
+                placeholder="Title, or part of one"
+              />
+            </div>
+
+            <div id="ssPickerStatus" class="fieldDescription"></div>
+            <div id="ssPickerResults" class="paperList"></div>
+          </div>
+
+          <!-- ============================= The item ========================= -->
+          <div id="ssItem" style="display: none">
+            <div class="verticalSection">
+              <h3 id="ssItemName"></h3>
+              <div id="ssItemMeta" class="fieldDescription"></div>
+              <div>
+                <button
+                  id="ssChangeItem"
+                  is="emby-button"
+                  type="button"
+                  class="raised emby-button"
+                >
+                  <span>Choose a different item</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="verticalSection">
+              <div id="ssSourceContainer" class="selectContainer" style="display: none">
+                <label class="selectLabel" for="ssSource">Version</label>
+                <select id="ssSource" is="emby-select" class="emby-select"></select>
+                <div class="fieldDescription">
+                  A stream index only means anything within one version, so the
+                  version chosen here is the one every later request names.
+                </div>
+              </div>
+
+              <div class="selectContainer">
+                <label class="selectLabel" for="ssSubtitle">Subtitle track to re-time</label>
+                <select id="ssSubtitle" is="emby-select" class="emby-select"></select>
+                <div id="ssSubtitleNote" class="fieldDescription"></div>
+              </div>
+
+              <div class="selectContainer">
+                <label class="selectLabel" for="ssAudio">Audio track to listen to</label>
+                <select id="ssAudio" is="emby-select" class="emby-select"></select>
+                <div class="fieldDescription">
+                  Speech is detected in this track. Pick the language the
+                  subtitles were written for.
+                </div>
+              </div>
+            </div>
+
+            <!-- =========================== Advanced ======================== -->
+            <details id="ssAdvanced" class="verticalSection">
+              <summary style="cursor: pointer; margin-bottom: 1em">Advanced</summary>
+
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="ssMaxOffset">
+                  Maximum search offset (seconds)
+                </label>
+                <input id="ssMaxOffset" type="number" is="emby-input" min="1" step="1" />
+                <div class="fieldDescription">
+                  How far out of step the track may be. Wider costs time and
+                  invites a wrong match.
+                  <button
+                    id="ssResetMaxOffset"
+                    is="emby-button"
+                    type="button"
+                    class="raised emby-button"
+                  >
+                    <span>Reset</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="selectContainer">
+                <label class="selectLabel" for="ssVad">Speech detection aggressiveness</label>
+                <select id="ssVad" is="emby-select" class="emby-select">
+                  <option value="0">0 - least aggressive</option>
+                  <option value="1">1</option>
+                  <option value="2">2 - default</option>
+                  <option value="3">3 - most aggressive</option>
+                </select>
+                <div class="fieldDescription">
+                  Higher discards more of the audio as non-speech. Changing this
+                  changes the cached signal, so a re-run has to re-analyse the
+                  audio.
+                  <button
+                    id="ssResetVad"
+                    is="emby-button"
+                    type="button"
+                    class="raised emby-button"
+                  >
+                    <span>Reset</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="ssRatios">
+                  Candidate framerate ratios
+                </label>
+                <textarea
+                  id="ssRatios"
+                  is="emby-input"
+                  rows="6"
+                  class="emby-input"
+                  spellcheck="false"
+                ></textarea>
+                <div class="fieldDescription">
+                  One per line, as a number or a division such as 23.976/25.
+                  Every candidate is searched, so a shorter list is faster.
+                  <button
+                    id="ssResetRatios"
+                    is="emby-button"
+                    type="button"
+                    class="raised emby-button"
+                  >
+                    <span>Reset</span>
+                  </button>
+                </div>
+              </div>
+            </details>
+
+            <!-- ============================== Run ========================== -->
+            <div class="verticalSection">
+              <button
+                id="ssRun"
+                is="emby-button"
+                type="button"
+                class="raised button-submit block emby-button"
+              >
+                <span>Analyse and sync</span>
+              </button>
+              <button
+                id="ssCancel"
+                is="emby-button"
+                type="button"
+                class="raised block emby-button"
+                style="display: none"
+              >
+                <span>Cancel</span>
+              </button>
+            </div>
+
+            <div id="ssProgress" class="verticalSection" style="display: none">
+              <div id="ssPhase" class="fieldDescription"></div>
+              <progress id="ssBar" max="1" style="width: 100%"></progress>
+              <div id="ssProgressDetail" class="fieldDescription"></div>
+            </div>
+
+            <div id="ssError" class="verticalSection" style="display: none">
+              <div id="ssErrorText" class="fieldDescription"></div>
+            </div>
+
+            <!-- ============================ Result ========================= -->
+            <div id="ssResult" class="verticalSection" style="display: none">
+              <h3>Result</h3>
+              <div id="ssVerdict" class="fieldDescription"></div>
+              <div id="ssWarnings" class="fieldDescription"></div>
+
+              <table id="ssRatioTable" class="tblLibraryInfo" style="width: 100%"></table>
+
+              <h3>Adjust by hand</h3>
+              <div class="fieldDescription">
+                Applied instantly to the corrected subtitle. Nothing is
+                re-analysed, so nudging is free.
+              </div>
+
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="ssNudgeOffset">
+                  Offset (seconds)
+                </label>
+                <input id="ssNudgeOffset" type="number" is="emby-input" step="0.05" />
+              </div>
+
+              <div class="selectContainer">
+                <label class="selectLabel" for="ssNudgeRatio">Ratio</label>
+                <select id="ssNudgeRatio" is="emby-select" class="emby-select"></select>
+              </div>
+
+              <div>
+                <button
+                  id="ssResetNudge"
+                  is="emby-button"
+                  type="button"
+                  class="raised emby-button"
+                >
+                  <span>Back to the detected values</span>
+                </button>
+              </div>
+
+              <div id="ssPreview" class="fieldDescription"></div>
+
+              <div class="verticalSection">
+                <button
+                  id="ssSave"
+                  is="emby-button"
+                  type="button"
+                  class="raised button-submit block emby-button"
+                >
+                  <span>Save as a new track</span>
+                </button>
+                <button
+                  id="ssDownload"
+                  is="emby-button"
+                  type="button"
+                  class="raised block emby-button"
+                >
+                  <span>Download the .srt</span>
+                </button>
+                <div id="ssSaveNote" class="fieldDescription"></div>
+              </div>
+            </div>
+          </div>
+
+          <div id="ssBuild" class="fieldDescription"></div>
+        </div>
+      </div>
+
+      <script type="text/javascript">
+        (function () {
+          // Bootstrap only. It loads the two embedded bundles - the shared
+          // algorithm from lib/, then this page's own UI - and hands over.
+          //
+          // The scripts are injected rather than written as <script src> tags:
+          // the client installs this fragment with innerHTML, which does not
+          // execute script elements it parses, and only runs the inline ones it
+          // finds afterwards. A dynamically created script is loaded normally.
+          var page = document.querySelector('#subtitleSyncPage');
+          var loading = null;
+
+          function loadScript(name) {
+            return new Promise(function (resolve, reject) {
+              var url = ApiClient.getUrl('web/ConfigurationPage', { name: name });
+              var existing = document.querySelector(
+                'script[data-subtitle-sync="' + name + '"]'
+              );
+              if (existing) {
+                if (existing.getAttribute('data-loaded') === 'true') {
+                  resolve();
+                  return;
+                }
+                existing.addEventListener('load', function () {
+                  resolve();
+                });
+                existing.addEventListener('error', function () {
+                  reject(new Error(name));
+                });
+                return;
+              }
+
+              var el = document.createElement('script');
+              el.async = false;
+              el.setAttribute('data-subtitle-sync', name);
+              el.addEventListener('load', function () {
+                el.setAttribute('data-loaded', 'true');
+                resolve();
+              });
+              el.addEventListener('error', function () {
+                reject(new Error(name));
+              });
+              el.src = url;
+              document.head.appendChild(el);
+            });
+          }
+
+          function boot() {
+            if (!loading) {
+              // subtitleSync.js defines window.SubtitleSync, which the page
+              // bundle reads at init time, so the order matters.
+              loading = loadScript('subtitleSync.js').then(function () {
+                return loadScript('subtitleSyncPage.js');
+              });
+            }
+            return loading;
+          }
+
+          page.addEventListener('pageshow', function () {
+            boot().then(
+              function () {
+                window.SubtitleSyncPage.init(page);
+              },
+              function (err) {
+                document.querySelector('#ssFatal').style.display = '';
+                document.querySelector('#ssFatal').textContent =
+                  'The Subtitle Sync page could not load its code (' +
+                  (err && err.message ? err.message : 'unknown') +
+                  '). Reload the page; if it persists, reinstall the plugin.';
+              }
+            );
+          });
+
+          page.addEventListener('viewdestroy', function () {
+            if (window.SubtitleSyncPage) {
+              window.SubtitleSyncPage.destroy(page);
+            }
+          });
+        })();
+      </script>
+    </div>
+  </body>
+</html>

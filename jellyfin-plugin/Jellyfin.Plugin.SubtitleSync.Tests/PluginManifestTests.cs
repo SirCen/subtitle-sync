@@ -18,6 +18,12 @@ public class PluginManifestTests
     private const string BundleResource =
         "Jellyfin.Plugin.SubtitleSync.Web.subtitleSync.js";
 
+    private const string SyncPageResource =
+        "Jellyfin.Plugin.SubtitleSync.Configuration.syncPage.html";
+
+    private const string PageBundleResource =
+        "Jellyfin.Plugin.SubtitleSync.Web.subtitleSyncPage.js";
+
     /// <summary>
     /// The GUID is the shared key between the server, the repository manifest and
     /// every installed copy. Changing it orphans existing installs.
@@ -81,6 +87,101 @@ public class PluginManifestTests
     }
 
     /// <summary>
+    /// The sync page itself (#12). Reached at
+    /// <c>/web/#/configurationpage?name=SubtitleSyncPage</c>, so the registered
+    /// name is part of every link to it - the Dashboard button, the injected
+    /// Subtitles-menu item (#13) and the Playwright specs.
+    /// </summary>
+    [Fact]
+    public void SyncPageIsEmbeddedUnderTheNameGetPagesAdvertises()
+    {
+        Assert.Contains(
+            SyncPageResource,
+            typeof(Plugin).Assembly.GetManifestResourceNames());
+
+        var page = Assert.Single(
+            UninitializedPlugin().GetPages(),
+            p => p.Name == Plugin.SyncPageName);
+
+        Assert.Equal(SyncPageResource, page.EmbeddedResourcePath);
+    }
+
+    /// <summary>
+    /// The sync page's UI bundle, served under a <c>.js</c> name for the same
+    /// content-type reason as the shared bundle.
+    /// </summary>
+    [Fact]
+    public void PageBundleIsEmbeddedUnderTheNameGetPagesAdvertises()
+    {
+        Assert.Contains(
+            PageBundleResource,
+            typeof(Plugin).Assembly.GetManifestResourceNames());
+
+        var page = Assert.Single(
+            UninitializedPlugin().GetPages(),
+            p => p.Name == Plugin.PageBundlePageName);
+
+        Assert.Equal(PageBundleResource, page.EmbeddedResourcePath);
+        Assert.EndsWith(".js", page.Name, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The four registered pages, and no fifth one nobody remembered to embed.
+    /// </summary>
+    /// <remarks>
+    /// Every name here is a URL somewhere: two are <c>?name=</c> values in
+    /// links, two are script sources the sync page's bootstrap fetches. A
+    /// rename is therefore a breaking change to a link, not an internal detail.
+    /// </remarks>
+    [Fact]
+    public void GetPagesRegistersExactlyTheFourKnownPages()
+    {
+        var names = UninitializedPlugin().GetPages().Select(p => p.Name).ToArray();
+
+        Assert.Equal(
+            new[] { "Subtitle Sync", "SubtitleSyncPage", "subtitleSync.js", "subtitleSyncPage.js" },
+            names.Order(StringComparer.Ordinal).ToArray());
+    }
+
+    /// <summary>
+    /// The bootstrap in the sync page loads the two script resources by name.
+    /// Those strings live in HTML, where no compiler checks them.
+    /// </summary>
+    [Fact]
+    public void SyncPageLoadsTheScriptNamesGetPagesRegisters()
+    {
+        var html = ReadResource(SyncPageResource);
+
+        Assert.Contains("loadScript('" + Plugin.BundlePageName + "')", html, StringComparison.Ordinal);
+        Assert.Contains("loadScript('" + Plugin.PageBundlePageName + "')", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The Dashboard route is the primary way in, so the configuration page has
+    /// to link to the sync page by the name it is actually registered under.
+    /// </summary>
+    [Fact]
+    public void ConfigPageLinksToTheSyncPage()
+    {
+        Assert.Contains(
+            "#/configurationpage?name=" + Plugin.SyncPageName,
+            ReadResource(ConfigPageResource),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The client runs a plugin page through <c>translateHtml</c> before
+    /// injecting it, which expands <c>${...}</c>. A JavaScript template literal
+    /// in the markup is therefore silently mangled, and the failure shows up as
+    /// a page that does nothing rather than as an error.
+    /// </summary>
+    [Fact]
+    public void SyncPageMarkupContainsNoTemplateLiteralPlaceholders()
+    {
+        Assert.DoesNotContain("${", ReadResource(SyncPageResource), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A bundle that failed to build but still embedded would be a zero-byte
     /// resource and a page that loads but does nothing. It carries a minified
     /// copy of lib/ plus ~27 KB of base64 libfvad, so it cannot be small.
@@ -117,4 +218,17 @@ public class PluginManifestTests
     /// </remarks>
     private static Plugin UninitializedPlugin()
         => (Plugin)RuntimeHelpers.GetUninitializedObject(typeof(Plugin));
+
+    /// <summary>
+    /// Reads an embedded resource as text.
+    /// </summary>
+    /// <param name="name">The manifest resource name.</param>
+    /// <returns>Its contents.</returns>
+    private static string ReadResource(string name)
+    {
+        using var stream = typeof(Plugin).Assembly.GetManifestResourceStream(name);
+        Assert.NotNull(stream);
+        using var reader = new System.IO.StreamReader(stream!);
+        return reader.ReadToEnd();
+    }
 }

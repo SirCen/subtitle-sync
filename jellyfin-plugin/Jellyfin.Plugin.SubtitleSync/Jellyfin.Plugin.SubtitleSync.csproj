@@ -50,12 +50,15 @@
   <ItemGroup>
     <None Remove="Configuration\configPage.html" />
     <EmbeddedResource Include="Configuration\configPage.html" />
+    <None Remove="Configuration\syncPage.html" />
+    <EmbeddedResource Include="Configuration\syncPage.html" />
   </ItemGroup>
 
   <PropertyGroup>
     <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..'))</RepoRoot>
     <WebProjectDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\web'))</WebProjectDir>
     <WebBundlePath>$(WebProjectDir)\dist\subtitleSync.js</WebBundlePath>
+    <WebPageBundlePath>$(WebProjectDir)\dist\subtitleSyncPage.js</WebPageBundlePath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -71,6 +74,14 @@
     -->
     <EmbeddedResource Include="$(WebBundlePath)"
                       LogicalName="Jellyfin.Plugin.SubtitleSync.Web.subtitleSync.js" />
+
+    <!--
+      The sync page's own UI (#12), built from the same run of build.mjs. Kept a
+      separate resource rather than folded into the bundle above so the page can
+      be served on its own, after the shared algorithm it depends on has loaded.
+    -->
+    <EmbeddedResource Include="$(WebPageBundlePath)"
+                      LogicalName="Jellyfin.Plugin.SubtitleSync.Web.subtitleSyncPage.js" />
   </ItemGroup>
 
   <!--
@@ -107,6 +118,8 @@
   <Target Name="VerifyWebBundle" AfterTargets="BuildWebBundle" BeforeTargets="PrepareResources">
     <Error Condition="!Exists('$(WebBundlePath)')"
            Text="The browser bundle $(WebBundlePath) does not exist. Run `npm run plugin:bundle` from $(RepoRoot)." />
+    <Error Condition="!Exists('$(WebPageBundlePath)')"
+           Text="The sync page bundle $(WebPageBundlePath) does not exist. Run `npm run plugin:bundle` from $(RepoRoot)." />
   </Target>
 
 </Project>

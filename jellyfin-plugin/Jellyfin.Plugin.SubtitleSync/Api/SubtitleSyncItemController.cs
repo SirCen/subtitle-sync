@@ -5,10 +5,13 @@ using System.Linq;
 using System.Net.Mime;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.SubtitleSync.MediaEncoding;
+using Jellyfin.Plugin.SubtitleSync.SignalCache;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.MediaEncoding;
+using MediaBrowser.Model.IO;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -67,6 +70,7 @@ public partial class SubtitleSyncItemController : ControllerBase
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ISubtitleEncoder _subtitleEncoder;
+    private readonly IFileSystem _fileSystem;
     private readonly ILogger<SubtitleSyncItemController> _logger;
 
     /// <summary>
@@ -75,16 +79,19 @@ public partial class SubtitleSyncItemController : ControllerBase
     /// <param name="libraryManager">Resolves an item id, honouring what the user may see.</param>
     /// <param name="mediaSourceManager">Lists an item's versions and their streams.</param>
     /// <param name="subtitleEncoder">Converts a track to SRT, external or embedded.</param>
+    /// <param name="fileSystem">Reads the media file's length and modification time, for the cache key.</param>
     /// <param name="logger">Logger.</param>
     public SubtitleSyncItemController(
         ILibraryManager libraryManager,
         IMediaSourceManager mediaSourceManager,
         ISubtitleEncoder subtitleEncoder,
+        IFileSystem fileSystem,
         ILogger<SubtitleSyncItemController> logger)
     {
         _libraryManager = libraryManager;
         _mediaSourceManager = mediaSourceManager;
         _subtitleEncoder = subtitleEncoder;
+        _fileSystem = fileSystem;
         _logger = logger;
     }
 
@@ -243,6 +250,114 @@ public partial class SubtitleSyncItemController : ControllerBase
     }
 
     /// <summary>
+    /// Reports the speech-signal cache key a given analysis would use.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Exists because the key covers the media file's length and last write time
+    /// (see <see cref="SignalCacheKeyInputs"/>), which the browser cannot see.
+    /// Without it the page has no way to ask <c>GET /SubtitleSync/Signal/{key}</c>
+    /// anything, so every run would fall through to the PCM stream - roughly
+    /// 115 MB per hour of runtime to rebuild a 45 KB signal the server may
+    /// already hold.
+    /// </para>
+    /// <para>
+    /// The media source and audio stream are resolved by the same
+    /// <see cref="PcmStreamPlanner"/> the PCM endpoint uses, so a key derived
+    /// here and the audio a later request decodes always describe the same
+    /// track. Deriving them independently is exactly how a cache serves one
+    /// stream's signal for another's audio.
+    /// </para>
+    /// </remarks>
+    /// <param name="itemId">The item to be analysed.</param>
+    /// <param name="mediaSourceId">Which version. Omit for the one Jellyfin plays by default.</param>
+    /// <param name="audioStreamIndex">Which audio track, as Jellyfin numbers it. Omit for the source's default.</param>
+    /// <param name="vadAggressiveness">The VAD mode the browser will run at, 0 to 3. Part of the identity: a different mode is a different signal.</param>
+    /// <returns>The cache key and the inputs it was resolved from.</returns>
+    /// <response code="200">The key.</response>
+    /// <response code="400">The requested source or audio stream is unusable, or the aggressiveness is out of range.</response>
+    /// <response code="404">No such item, or it has nothing to decode.</response>
+    [HttpGet("SignalKey/{itemId}")]
+    [Produces(MediaTypeNames.Application.Json)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult<SignalKeyResponse> GetSignalKey(
+        [FromRoute, Required] Guid itemId,
+        [FromQuery] string? mediaSourceId,
+        [FromQuery] int? audioStreamIndex,
+        [FromQuery] int vadAggressiveness = 2)
+    {
+        if (vadAggressiveness is < 0 or > 3)
+        {
+            return Problem(
+                detail: "VAD aggressiveness must be 0, 1, 2 or 3.",
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid aggressiveness");
+        }
+
+        var item = FindItem(itemId);
+        if (item is null)
+        {
+            return NotFoundItem(itemId);
+        }
+
+        var plan = PcmStreamPlanner.Plan(
+            _mediaSourceManager.GetStaticMediaSources(item, false),
+            mediaSourceId,
+            audioStreamIndex);
+
+        if (!plan.Succeeded)
+        {
+            return plan.Failure switch
+            {
+                PcmStreamPlanFailure.NoMediaSource or PcmStreamPlanFailure.UnknownMediaSource
+                    => Problem(
+                        detail: plan.ErrorMessage,
+                        statusCode: StatusCodes.Status404NotFound,
+                        title: "Nothing to analyse"),
+                _ => Problem(
+                    detail: plan.ErrorMessage,
+                    statusCode: StatusCodes.Status400BadRequest,
+                    title: "Nothing to analyse"),
+            };
+        }
+
+        // The two filesystem facts are what make a replaced file miss rather
+        // than silently reuse the previous encode's signal.
+        var file = _fileSystem.GetFileInfo(plan.InputPath);
+        if (!file.Exists)
+        {
+            return Problem(
+                detail: string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"'{item.Name}' points at {plan.InputPath}, which this server cannot read, so no signal can be cached for it."),
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Media file unavailable");
+        }
+
+        var key = SignalCacheKey.Derive(new SignalCacheKeyInputs
+        {
+            ItemId = itemId.ToString("N", CultureInfo.InvariantCulture),
+            MediaSourceId = plan.MediaSourceId ?? string.Empty,
+            AudioStreamIndex = plan.AudioStreamIndex,
+            VadAggressiveness = vadAggressiveness,
+            FileLength = file.Length,
+            FileModifiedUtc = file.LastWriteTimeUtc,
+        });
+
+        LogDerivedSignalKey(itemId, plan.AudioStreamIndex, vadAggressiveness);
+
+        return new SignalKeyResponse
+        {
+            Key = key,
+            MediaSourceId = plan.MediaSourceId,
+            AudioStreamIndex = plan.AudioStreamIndex,
+            VadAggressiveness = vadAggressiveness,
+        };
+    }
+
+    /// <summary>
     /// Resolves an item id against what the caller is allowed to see.
     /// </summary>
     /// <remarks>
@@ -345,4 +460,22 @@ public partial class SubtitleSyncItemController : ControllerBase
         Level = LogLevel.Warning,
         Message = "Item {ItemId} exists in the library database but could not be deserialised; answering as not found")]
     private partial void LogItemNotDeserializable(Guid itemId, Exception exception);
+
+    /// <summary>
+    /// Logs a cache key handed to the page.
+    /// </summary>
+    /// <remarks>
+    /// The key itself is deliberately absent. It is a hash of the item and the
+    /// file's metadata and there is nothing to learn from it in a log; what is
+    /// worth seeing is which track and mode were asked about, because a cache
+    /// that never hits is usually a page asking about a different one each time.
+    /// </remarks>
+    /// <param name="itemId">The item.</param>
+    /// <param name="audioStreamIndex">The resolved audio stream.</param>
+    /// <param name="vadAggressiveness">The VAD mode.</param>
+    [LoggerMessage(
+        EventId = 7004,
+        Level = LogLevel.Debug,
+        Message = "Derived a speech signal cache key for item {ItemId}, audio stream {AudioStreamIndex}, VAD mode {VadAggressiveness}")]
+    private partial void LogDerivedSignalKey(Guid itemId, int audioStreamIndex, int vadAggressiveness);
 }

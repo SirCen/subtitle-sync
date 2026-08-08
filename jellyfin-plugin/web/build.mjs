@@ -40,6 +40,14 @@ const dev = watch || args.has("--dev");
 
 const ENTRY = resolve(here, "src", "index.ts");
 const OUTFILE = resolve(here, "dist", "subtitleSync.js");
+
+// The sync page UI (#12). A SECOND bundle on purpose: it reaches the algorithm
+// through `window.SubtitleSync`, which the bundle above defines, so lib/ and the
+// 27 KB of inline libfvad are downloaded once and cached once rather than
+// duplicated into the page. It is also what keeps the page replaceable without
+// rebuilding the shared bundle.
+const PAGE_ENTRY = resolve(here, "src", "page", "main.ts");
+const PAGE_OUTFILE = resolve(here, "dist", "subtitleSyncPage.js");
 const FVAD_SHIM = resolve(here, "src", "fvadWasm.ts");
 const FFMPEG_STUB = resolve(here, "src", "ffmpegUnavailable.ts");
 
@@ -176,6 +184,50 @@ async function assertSelfContained(file, metafile) {
   return size;
 }
 
+/**
+ * The page bundle's own check. It carries no algorithm and no wasm - it reads
+ * `window.SubtitleSync` - so the payload assertions above do not apply. What
+ * still must hold is that it needs no loader and no network, and that it did
+ * not accidentally inline lib/ by importing a value where a type was meant.
+ */
+async function assertPageSelfContained(file, metafile) {
+  const code = await readFile(file, "utf8");
+  for (const [pattern, what] of FORBIDDEN) {
+    const hit = code.match(pattern);
+    if (hit) {
+      throw new Error(
+        `page bundle is not self-contained: found ${what} (${JSON.stringify(hit[0])}).`,
+      );
+    }
+  }
+
+  if (metafile) {
+    const inputs = Object.keys(metafile.inputs).map((p) => p.replace(/\\/g, "/"));
+
+    const stowaways = inputs.filter((p) => p.includes("node_modules/"));
+    if (stowaways.length) {
+      throw new Error(`page bundle pulled in dependencies: ${stowaways.join(", ")}`);
+    }
+
+    // A value import from lib/ would duplicate the algorithm into a second
+    // download and, worse, give the page a copy that could drift from the one
+    // `window.SubtitleSync` exposes. Type-only imports leave no input here.
+    const libCopies = inputs.filter((p) => /(^|\/)lib\//.test(p));
+    if (libCopies.length) {
+      throw new Error(
+        `page bundle inlined lib/ (${libCopies.join(", ")}). Reach the algorithm ` +
+          "through window.SubtitleSync, and import from lib/ with `import type` only.",
+      );
+    }
+  }
+
+  const { size } = await stat(file);
+  if (size < 2_000) {
+    throw new Error(`page bundle is implausibly small (${size} bytes)`);
+  }
+  return size;
+}
+
 // ---------------------------------------------------------------------------
 // Build
 // ---------------------------------------------------------------------------
@@ -210,44 +262,62 @@ const options = {
   metafile: true,
 };
 
+const pageOptions = {
+  ...options,
+  entryPoints: [PAGE_ENTRY],
+  outfile: PAGE_OUTFILE,
+  // The page installs `window.SubtitleSyncPage` itself, from module scope, so
+  // it needs no global name of its own.
+  globalName: undefined,
+};
+
+const builds = [
+  { name: "bundle", options, outfile: OUTFILE, verify: assertSelfContained },
+  { name: "page", options: pageOptions, outfile: PAGE_OUTFILE, verify: assertPageSelfContained },
+];
+
 await mkdir(dirname(OUTFILE), { recursive: true });
 
-function report(size) {
-  const rel = OUTFILE.slice(repoRoot.length + 1).replace(/\\/g, "/");
+function report(outfile, size) {
+  const rel = outfile.slice(repoRoot.length + 1).replace(/\\/g, "/");
   console.log(
     `[subtitle-sync] ${rel}  ${(size / 1024).toFixed(1)} KB${dev ? "  (dev)" : ""}`,
   );
 }
 
 if (watch) {
-  const ctx = await esbuild.context({
-    ...options,
-    plugins: [
-      ...options.plugins,
-      {
-        name: "report",
-        setup(build) {
-          build.onEnd(async (result) => {
-            if (result.errors.length) return;
-            try {
-              report(await assertSelfContained(OUTFILE, result.metafile));
-            } catch (err) {
-              console.error(`[subtitle-sync] ${err.message}`);
-            }
-          });
+  for (const build of builds) {
+    const ctx = await esbuild.context({
+      ...build.options,
+      plugins: [
+        ...build.options.plugins,
+        {
+          name: "report",
+          setup(esbuildBuild) {
+            esbuildBuild.onEnd(async (result) => {
+              if (result.errors.length) return;
+              try {
+                report(build.outfile, await build.verify(build.outfile, result.metafile));
+              } catch (err) {
+                console.error(`[subtitle-sync] ${err.message}`);
+              }
+            });
+          },
         },
-      },
-    ],
-  });
-  await ctx.watch();
+      ],
+    });
+    await ctx.watch();
+  }
   console.log("[subtitle-sync] watching jellyfin-plugin/web and lib/ ...");
 } else {
-  const result = await esbuild.build(options);
-  // Written next to the bundle so a stale build is diagnosable without guessing
-  // which files went into it. Not embedded in the assembly.
-  await writeFile(
-    resolve(dirname(OUTFILE), "meta.json"),
-    JSON.stringify(result.metafile, null, 2),
-  );
-  report(await assertSelfContained(OUTFILE, result.metafile));
+  for (const build of builds) {
+    const result = await esbuild.build(build.options);
+    // Written next to the bundle so a stale build is diagnosable without
+    // guessing which files went into it. Not embedded in the assembly.
+    await writeFile(
+      resolve(dirname(build.outfile), `meta.${build.name}.json`),
+      JSON.stringify(result.metafile, null, 2),
+    );
+    report(build.outfile, await build.verify(build.outfile, result.metafile));
+  }
 }

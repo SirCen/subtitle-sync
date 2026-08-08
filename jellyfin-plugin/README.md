@@ -25,7 +25,32 @@ Inside the plugin project:
 Plugin.cs                          BasePlugin<PluginConfiguration>, IHasWebPages
 Configuration/PluginConfiguration.cs   settings, serialised to XML by the server
 Configuration/configPage.html          embedded resource, served as the config page
+Configuration/syncPage.html            embedded resource, served as the sync page
+Api/                                   the endpoints the sync page calls
 ```
+
+### The pages
+
+`GetPages()` registers four resources, all reachable at
+`/web/ConfigurationPage?name=<name>`:
+
+| Name | What |
+| --- | --- |
+| `Subtitle Sync` | The Dashboard settings page. Links to the sync page. |
+| `SubtitleSyncPage` | The sync UI. `/web/#/configurationpage?name=SubtitleSyncPage`, optionally `&itemId=<id>`. |
+| `subtitleSync.js` | The esbuild bundle of `lib/`, exposed as `window.SubtitleSync`. |
+| `subtitleSyncPage.js` | The sync page's own UI code. Reads the bundle above. |
+
+Both entry paths into the sync page have to work: with an `itemId` (what the
+injected Subtitles-menu item of #13 supplies) and without one, where the page
+shows a library picker. The picker is the **primary** route, because the
+injection depends on a third-party plugin that patches the server at runtime.
+
+Note that the 10.11 web client routes `configurationpage` behind an
+admin-level guard, so a non-admin cannot open the sync page from the Dashboard
+however their subtitle permission is set. The server-side split is still real -
+reading and analysing need `SubtitleManagement`, saving needs elevation - and
+the page presents a refused save as a limit with Download still working.
 
 ## Building
 

@@ -20,8 +20,31 @@
     >
       <div data-role="content">
         <div class="content-primary">
+          <h2>Subtitle Sync</h2>
+
+          <!--
+            The way in. Dashboard is the PRIMARY route to the sync page, not a
+            fallback: the Subtitles-menu item (#13) is injected by a third-party
+            plugin that patches the server at runtime and may not be installed,
+            so this link has to be the obvious one.
+          -->
+          <div class="verticalSection">
+            <a
+              id="openSyncPage"
+              is="emby-linkbutton"
+              class="raised button-submit block emby-button"
+              href="#/configurationpage?name=SubtitleSyncPage"
+            >
+              <span>Sync a subtitle track</span>
+            </a>
+            <div class="fieldDescription">
+              Pick a film or episode, choose the track that drifts, and re-time
+              it against the audio. The analysis runs in this browser.
+            </div>
+          </div>
+
           <form id="subtitleSyncConfigForm">
-            <h2>Subtitle Sync</h2>
+            <h3>Settings</h3>
 
             <div class="checkboxContainer checkboxContainerWithDescription">
               <label class="emby-checkbox-label">

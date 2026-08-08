@@ -192,25 +192,40 @@ Specs live in `jellyfin-plugin/e2e/`. Run with `npm run jf:e2e`.
 - fixture item has the external SRT as a subtitle track
 - Dashboard > Plugins loads for an admin
 
-**Skipped pending the plugin** (`plugin.spec.ts`) - written out in full, each
-with a comment naming the issue that enables it:
+**Also passing** (`plugin.spec.ts`) - the plugin itself, needing the DLL staged
+and the container restarted:
+
+- plugin appears under Dashboard > Plugins, and its config page renders (#3)
+- the save endpoint's behaviour: siblings, collisions, concurrency, permissions
+  and refusals (#8)
+- the sync page (#12): both entry paths, a full sync run over **Structured
+  Clip** asserting it recovers `syncableKnownOffset` exactly, download, a nudge
+  that talks to nobody, a refused save, and the client's admin-only route guard
+
+**Still skipped** - the behaviour does not exist yet:
 
 | Test | Enabled by |
 | --- | --- |
-| plugin appears under Dashboard > Plugins | #3 |
-| plugin config page renders | #3 |
 | config page shows the File Transformation install banner | #13 |
 | "Sync subtitles..." appears in the Subtitles menu for an admin | #13 |
 | the menu item does not appear for a non-admin user | #13 |
 | the menu item survives SPA navigation | #13 |
-| a full sync run through the plugin page produces a sibling `.srt` | #12 |
 
-The #12 test should run against **Structured Clip**, not Sample Clip - see
-"Two movies" above.
+Any test that asserts a sync is *correct* runs against **Structured Clip**, not
+Sample Clip - see "Two movies" above.
 
 To enable one: drop the DLL in, restart, delete the `.skip`. Their selectors are
 a best guess at the client's DOM and will likely need a pass against a live
 server - that is cheap now that there is a live server to check against.
+
+> **The plugin page route is admin-only in the client, whatever the server
+> policy says.** 10.11's router puts `configurationpage` inside an
+> `admin`-level `ConnectionRequired` guard, so a non-admin who *does* have
+> `EnableSubtitleManagement` is redirected to `#/home` before the page loads.
+> The server-side split still holds - analysing is `SubtitleManagement`, saving
+> is elevated - and the page handles a 403 from Save by pointing at Download,
+> but reaching it as a non-admin is something #13 has to solve, not something
+> the Dashboard route can.
 
 Note the three #13 tests also need the **File Transformation** plugin installed
 into the container, which this harness deliberately does not do: its absence is
