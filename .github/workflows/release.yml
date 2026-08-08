@@ -169,10 +169,24 @@ jobs:
 
           # Changelog: the annotated tag's message if there is one, otherwise a
           # bare line. Shown in Dashboard > Plugins next to the version.
-          changelog=$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME")
+          #
+          # Re-fetch the tag first. actions/checkout resolves the ref to a
+          # commit and leaves a LIGHTWEIGHT tag behind, and %(contents:subject)
+          # on a lightweight tag falls through to the commit's subject with no
+          # error - so without this the changelog silently becomes whatever the
+          # last commit message happened to be. Observed on 1.0.0.0.
+          git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+
+          # `git tag -l` cannot tell the two apart, but cat-file can.
+          if [[ "$(git cat-file -t "$GITHUB_REF_NAME")" == "tag" ]]; then
+            changelog=$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME")
+          else
+            changelog=""
+          fi
           if [[ -z "$changelog" ]]; then
             changelog="Release $version"
           fi
+          echo "Changelog: $changelog"
 
           timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
