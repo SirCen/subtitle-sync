@@ -35,6 +35,15 @@
     -->
     <PackageReference Include="Jellyfin.Controller" Version="10.11.11" />
     <PackageReference Include="Jellyfin.Model" Version="10.11.11" />
+
+    <!--
+      Same story as above, for the same reason. The plugin project excludes
+      Newtonsoft.Json's runtime asset so that it binds to the server's copy at
+      run time rather than shipping a second one into its own load context (see
+      the comment in Jellyfin.Plugin.SubtitleSync.csproj). Nothing gives the test
+      host a copy, so it is asked for here.
+    -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
   <ItemGroup>

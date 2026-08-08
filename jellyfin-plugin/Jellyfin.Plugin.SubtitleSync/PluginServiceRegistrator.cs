@@ -1,3 +1,4 @@
+using Jellyfin.Plugin.SubtitleSync.Injection;
 using Jellyfin.Plugin.SubtitleSync.SignalCache;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
@@ -36,5 +37,17 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         // its size cap is read fresh from the configuration on every write so a
         // change on the configuration page takes effect without a restart.
         serviceCollection?.AddSingleton<ISignalCacheStore, SignalCacheStore>();
+
+        // The Subtitles-menu injection (#13). Three pieces: the record of what
+        // happened, the thing that makes it happen, and the startup hook that
+        // runs it. Split up so the configuration page's status endpoint can read
+        // the outcome without knowing anything about reflection or Harmony.
+        //
+        // AddHostedService rather than a scheduled task: this runs before
+        // Kestrel serves its first index.html, which is the difference between
+        // the menu item being there on first load and only after a refresh.
+        serviceCollection?.AddSingleton<InjectionState>();
+        serviceCollection?.AddSingleton<FileTransformationRegistrar>();
+        serviceCollection?.AddHostedService<InjectionStartupService>();
     }
 }

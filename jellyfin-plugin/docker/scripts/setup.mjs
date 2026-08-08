@@ -30,6 +30,7 @@ import {
   waitForItem,
   waitForServer,
 } from "./jellyfin-api.mjs";
+import { install as installFileTransformation } from "./file-transformation.mjs";
 import { seedLibrary } from "./seed-library.mjs";
 
 function compose(...args) {
@@ -39,7 +40,11 @@ function compose(...args) {
   });
 }
 
-export async function setup({ startContainer = true, log = console.log } = {}) {
+export async function setup({
+  startContainer = true,
+  installFileTransformationPlugin = process.env.JELLYFIN_SKIP_FILE_TRANSFORMATION !== "1",
+  log = console.log,
+} = {}) {
   log("--- seeding library from test/fixtures");
   seedLibrary();
 
@@ -50,6 +55,23 @@ export async function setup({ startContainer = true, log = console.log } = {}) {
 
   log("--- waiting for Jellyfin");
   await waitForServer({ log });
+
+  // The Subtitles-menu specs (#13) need this, and Jellyfin has no way to
+  // declare it as a dependency, so the harness installs it itself. Skippable
+  // because "what does this look like without File Transformation?" is a real
+  // question the plugin has to answer well - see the README.
+  if (installFileTransformationPlugin) {
+    log("--- File Transformation");
+    const result = await installFileTransformation({ log });
+
+    // Jellyfin only scans /config/plugins at startup, so a fresh unpack is
+    // invisible until the container comes back.
+    if (result.changed && startContainer) {
+      log("--- restarting so Jellyfin picks it up");
+      compose("restart", "jellyfin");
+      await waitForServer({ log });
+    }
+  }
 
   log("--- first-run setup");
   await completeStartupWizard({
@@ -112,7 +134,10 @@ export async function setup({ startContainer = true, log = console.log } = {}) {
 
 const invokedDirectly = process.argv[1]?.replace(/\\/g, "/").endsWith("scripts/setup.mjs");
 if (invokedDirectly) {
-  setup({ startContainer: !process.argv.includes("--no-start") }).catch((error) => {
+  setup({
+    startContainer: !process.argv.includes("--no-start"),
+    installFileTransformationPlugin: !process.argv.includes("--no-file-transformation"),
+  }).catch((error) => {
     console.error(`\nsetup failed: ${error.message}`);
     process.exit(1);
   });

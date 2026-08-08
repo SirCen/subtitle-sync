@@ -14,9 +14,9 @@ npm run jf:e2e
 ```
 
 That seeds the library, starts the container, completes the first-run wizard,
-creates the users and the library, waits for the scan, then runs the Playwright
-smoke tests. It is idempotent, so re-running it against a live server just
-re-checks everything.
+creates the users and the library, installs the File Transformation plugin,
+waits for the scan, then runs the Playwright smoke tests. It is idempotent, so
+re-running it against a live server just re-checks everything.
 
 To bring the server up without running tests:
 
@@ -25,6 +25,10 @@ npm run jf:up      # http://127.0.0.1:8096/web/  (harness / harness-password)
 npm run jf:logs    # follow the server log
 npm run jf:down    # stop, keep state
 npm run jf:down -- --purge   # stop and wipe volumes + seeded media
+
+npm run jf:ft            # install the File Transformation plugin (idempotent)
+npm run jf:ft:uninstall  # remove it, to check what happens without it
+npm run jf:ft:status     # what the running server actually has loaded
 ```
 
 ### Prerequisites
@@ -41,13 +45,26 @@ npm run jf:down -- --purge   # stop and wipe volumes + seeded media
 | Image | `jellyfin/jellyfin:10.11.11` |
 | URL | `http://127.0.0.1:8096` (`JELLYFIN_PORT` to change) |
 | Admin | `harness` / `harness-password` |
-| Non-admin | `viewer` / `viewer-password` |
+| Non-admin | `viewer` / `viewer-password`, holds `EnableSubtitleManagement` |
 | Library | "Harness Movies" -> `/media/movies` |
 | Item | "Sample Clip" (2020), with an external English `.srt` track |
 | Item | "Structured Clip", ditto, but its track is displaced by a **known -3.2 s** |
 
 Everything above is defined once in `harness.config.json` and overridable by env
 var; see the `_env` block in that file.
+
+#### Why the non-admin has subtitle rights
+
+`viewer` is given `EnableSubtitleManagement` deliberately, and it is what makes
+the #13 non-admin test worth running. Without it the client shows them no "Edit
+subtitles" entry either, so "our menu item is absent" would be true whether or
+not our script checked anything. With it, the client renders the exact menu our
+script attaches to and the item's absence proves the `IsAdministrator` gate is
+doing the work.
+
+They are still not an administrator, which is the point: the 10.11 client puts
+plugin configuration pages behind an admin route guard, so this user could not
+open the sync page even though the server would let them analyse. See #12.
 
 ### Why the tag is pinned to 10.11.11
 
@@ -180,6 +197,74 @@ Jellyfin only scans plugins at startup, so the restart is required. Confirm with
 > tell the two builds apart. `window.SubtitleSync.BUILD` in the browser carries
 > an ISO build stamp, which is the reliable way to confirm the bundle is fresh.
 
+## The File Transformation plugin
+
+The Subtitles-menu item (#13) is injected into the web client by
+[File Transformation](https://github.com/IAmParadox27/jellyfin-plugin-file-transformation),
+a third-party plugin. Jellyfin 10.11 has no dependency mechanism that could pull
+it in, so the harness installs it itself:
+
+```bash
+npm run jf:ft            # download, verify, stage
+docker compose -f jellyfin-plugin/docker/docker-compose.yml restart jellyfin
+npm run jf:ft:status     # File Transformation 2.5.11.0 (Active)
+```
+
+`npm run jf:up` does all of that, including the restart, so a purged server comes
+back with it installed without anyone clicking through the Dashboard. Set
+`JELLYFIN_SKIP_FILE_TRANSFORMATION=1` (or pass `--no-file-transformation`) to
+bring the harness up without it.
+
+### Why not install it through Jellyfin
+
+Jellyfin can do this itself - add the repository, `POST
+/Packages/Installed/{name}` - and that is the route a real user takes. It is the
+wrong route for a harness. The manifest publishes **six entries all numbered
+`2.5.11.0`**, one per Jellyfin patch release, distinguished only by `targetAbi`;
+asking for "version 2.5.11.0" does not say which one you get. It also needs
+`iamparadox.dev` reachable from inside the container at the moment the test runs.
+
+`scripts/file-transformation.mjs` instead pins the asset for
+`targetAbi 10.11.11.0` - the tag `docker-compose.yml` runs - checks the MD5 the
+manifest publishes, and unpacks it into `plugins/FileTransformation/`, which is
+bind-mounted into the container. One version, one checksum, reproducible.
+
+### Two traps, both found the hard way
+
+**The release zip has no `meta.json`.** Jellyfin's own installer synthesises one
+from the repository manifest, so a zip unpacked by hand arrives without it - and
+a plugin folder with no manifest gets an *invented* identity: a guid derived from
+the folder name, the name "FileTransformation", the server's version number, and
+eventually `"status": "Deleted"` and a `Skipping disabled plugin` line in the
+log. The install script writes a real `meta.json`, which is what makes the folder
+an install rather than a pile of DLLs.
+
+**Uninstalling means deleting two directories.** Once Jellyfin has migrated a
+plugin into `/config/plugins/File Transformation_2.5.11.0/` it loads from there,
+so emptying the bind mount removes nothing. Worse, staging a fresh copy while the
+migrated one is still present gives the server **two** File Transformation
+assemblies in two load contexts: it loads both, the second fails to construct
+with an `InvalidCastException` between two identically named types, and every
+request for `/web/` then returns 500. `npm run jf:ft:uninstall` clears both.
+Note the quoting - the path has a space in it, and an unquoted glob in `sh -c`
+silently deletes nothing.
+
+### Checking the absent case
+
+The plugin has to work with File Transformation gone, and that is a real state
+worth visiting rather than only mocking:
+
+```bash
+npm run jf:ft:uninstall
+docker compose -f jellyfin-plugin/docker/docker-compose.yml restart jellyfin
+```
+
+Expect: Subtitle Sync still loads, `GET /SubtitleSync/Status` answers
+`NotInstalled`, the configuration page shows the install note with the
+repository URL, the Dashboard route to the sync page still works, and
+`/web/index.html` no longer carries the injected `<script data-subtitle-sync>`.
+Then `npm run jf:ft` and restart to put it back.
+
 ## The smoke tests
 
 Specs live in `jellyfin-plugin/e2e/`. Run with `npm run jf:e2e`.
@@ -202,21 +287,40 @@ and the container restarted:
   Clip** asserting it recovers `syncableKnownOffset` exactly, download, a nudge
   that talks to nobody, a refused save, and the client's admin-only route guard
 
-**Still skipped** - the behaviour does not exist yet:
+- the Subtitles-menu injection (#13): the item appears for an admin, directly
+  beneath the client's own "Edit subtitles"; it opens the sync page for the
+  right item; it does **not** appear for a non-admin who *does* have subtitle
+  rights; it survives client-side navigation between two detail pages and
+  carries the new item's id; and the configuration page shows the install note
+  when the status endpoint reports File Transformation missing, and stays quiet
+  when it is working
 
-| Test | Enabled by |
-| --- | --- |
-| config page shows the File Transformation install banner | #13 |
-| "Sync subtitles..." appears in the Subtitles menu for an admin | #13 |
-| the menu item does not appear for a non-admin user | #13 |
-| the menu item survives SPA navigation | #13 |
+**Nothing is skipped.** Every issue these were written ahead of has landed.
 
 Any test that asserts a sync is *correct* runs against **Structured Clip**, not
 Sample Clip - see "Two movies" above.
 
-To enable one: drop the DLL in, restart, delete the `.skip`. Their selectors are
-a best guess at the client's DOM and will likely need a pass against a live
-server - that is cheap now that there is a live server to check against.
+### What the injection tests learned from a live client
+
+The selectors these were first written with were all wrong, which is exactly
+what the harness is for:
+
+- **There is no "Subtitles" button on a detail page.** The entry lives inside
+  the `...` overflow menu: button `.btnMoreCommands` (title "More"), menu
+  `.actionSheet`, items `button[data-id]` - ours is `subtitlesync-sync`, the
+  client's is `editsubtitles`.
+- **The client caches views.** After a client-side navigation between two detail
+  pages, both pages' markup is in the DOM and only one is displayed, so
+  `.itemName` and `.btnMoreCommands` need a `visible: true` filter or they
+  resolve to the page you just left.
+- **The menu will not close on Escape.** Not from `page.keyboard.press`, not
+  from a synthetic `keydown` on `document` or on the dialog, and not from a
+  programmatic `.click()` on `.dialogBackdrop`. A real pointer event outside the
+  dialog works, and so does `history.back()`. The injected script relies on
+  neither: routing to the sync page tears the dialog down.
+- **`itemContextMenu.js` lives in `55802.9a5b7bc258c2f90abe5e.chunk.js`** on
+  10.11.11 - a webpack module id plus a content hash, minified. Settled against
+  the running container, and the reason `index.html` is the injection target.
 
 > **The plugin page route is admin-only in the client, whatever the server
 > policy says.** 10.11's router puts `configurationpage` inside an
@@ -226,10 +330,6 @@ server - that is cheap now that there is a live server to check against.
 > is elevated - and the page handles a 403 from Save by pointing at Download,
 > but reaching it as a non-admin is something #13 has to solve, not something
 > the Dashboard route can.
-
-Note the three #13 tests also need the **File Transformation** plugin installed
-into the container, which this harness deliberately does not do: its absence is
-what the install-banner test asserts.
 
 ### Gotchas found the hard way
 
@@ -262,12 +362,15 @@ pulls, and the fixture is committed so there is no media to fetch. But:
   Jellyfin works.
 - The value here is *interactive*: the injection in #13 breaks on client
   updates, and diagnosing that means opening the page, not reading a CI log.
-- The tests that would justify the cost are all still skipped.
+- Adding the File Transformation download to the critical path of every PR ties
+  the gate to a third-party host being up.
 
 The honest split: `npx tsc --noEmit`, `npm test` and `dotnet test` (#14) stay on
-the PR gate; this stays a local pre-merge check for plugin work, and becomes a
-candidate for a **scheduled or manually-dispatched** workflow once the #13 tests
-are unskipped and actually load-bearing.
+the PR gate; this stays a local pre-merge check for plugin work. Now that the
+#13 tests are live and load-bearing it is a genuine candidate for a **scheduled
+or manually-dispatched** workflow - which is the right shape for it anyway,
+since what those tests actually watch for is a Jellyfin or File Transformation
+release breaking the injection, not a change in this repository.
 
 Nothing here blocks that: `JELLYFIN_SKIP_DOCKER=1` plus `JELLYFIN_URL` already
 points the suite at a server started by other means, e.g. a compose service in a

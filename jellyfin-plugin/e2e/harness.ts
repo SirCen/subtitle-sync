@@ -328,8 +328,35 @@ export function loginAsViewer(page: Page): Promise<void> {
   return login(page, VIEWER_USERNAME, VIEWER_PASSWORD);
 }
 
-/** Navigates to an item's detail page and waits for its title to render. */
+/**
+ * Navigates to an item's detail page and waits for its title to render.
+ *
+ * `visible: true` is not defensive padding. The 10.11 client caches views: after
+ * a client-side navigation between two detail pages, BOTH pages' markup is in
+ * the DOM and only one is displayed. `.itemName` first() would resolve to
+ * whichever was cached first, which is the page you just left.
+ */
 export async function gotoItemDetail(page: Page, itemId: string): Promise<void> {
   await page.goto(`/web/#/details?id=${itemId}`);
-  await expect(page.locator(".itemName").first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".itemName").filter({ visible: true }).first()).toBeVisible({
+    timeout: 30_000,
+  });
+}
+
+/**
+ * Navigates from one detail page to another WITHOUT a page load, which is the
+ * requirement the injected menu item has to survive.
+ *
+ * Driven through the hash rather than by clicking a link: the two seeded movies
+ * do not link to each other, and going via the home screen and back exercises
+ * the client's view cache rather than the navigation the user actually makes.
+ */
+export async function spaNavigateToItem(page: Page, itemId: string): Promise<void> {
+  await page.evaluate((id) => {
+    window.location.hash = `#/details?id=${id}`;
+  }, itemId);
+
+  await expect(page.locator(".itemName").filter({ visible: true }).first()).toBeVisible({
+    timeout: 30_000,
+  });
 }

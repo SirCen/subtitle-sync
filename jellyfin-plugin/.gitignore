@@ -8,3 +8,8 @@ obj/
 # the build output copied into it is not.
 docker/plugins/SubtitleSync/*
 !docker/plugins/SubtitleSync/.gitkeep
+
+# Same again for the File Transformation plugin (#13), which the harness
+# downloads rather than vendors. See docker/scripts/file-transformation.mjs.
+docker/plugins/FileTransformation/*
+!docker/plugins/FileTransformation/.gitkeep

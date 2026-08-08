@@ -17,7 +17,7 @@ actually ships. See epic #18.
 | `Jellyfin.Plugin.SubtitleSync.sln` | Solution over both. |
 | `docker/` | Local Jellyfin 10.11 server to test against. See `docker/README.md`. |
 | `e2e/` | Playwright smoke tests that drive that server. |
-| `web/` | Browser-side sources for the plugin page (#10, #12). |
+| `web/` | Browser-side sources for the plugin page (#10, #12) and the injected menu item (#13). |
 
 Inside the plugin project:
 
@@ -27,6 +27,7 @@ Configuration/PluginConfiguration.cs   settings, serialised to XML by the server
 Configuration/configPage.html          embedded resource, served as the config page
 Configuration/syncPage.html            embedded resource, served as the sync page
 Api/                                   the endpoints the sync page calls
+Injection/                             the Subtitles-menu item (#13)
 ```
 
 ### The pages
@@ -41,6 +42,10 @@ Api/                                   the endpoints the sync page calls
 | `subtitleSync.js` | The esbuild bundle of `lib/`, exposed as `window.SubtitleSync`. |
 | `subtitleSyncPage.js` | The sync page's own UI code. Reads the bundle above. |
 
+A fifth bundle, `subtitleSyncInject.js`, is built alongside them but is **not**
+registered here. It is inlined into the web client's `index.html` instead; see
+below.
+
 Both entry paths into the sync page have to work: with an `itemId` (what the
 injected Subtitles-menu item of #13 supplies) and without one, where the page
 shows a library picker. The picker is the **primary** route, because the
@@ -51,6 +56,52 @@ admin-level guard, so a non-admin cannot open the sync page from the Dashboard
 however their subtitle permission is set. The server-side split is still real -
 reading and analysing need `SubtitleManagement`, saving needs elevation - and
 the page presents a refused save as a limit with Download still working.
+
+### The Subtitles menu item
+
+Jellyfin 10.11 has no supported extension point for the item detail page, so
+this is a controlled hack and is built to fail softly.
+
+```
+Injection/FileTransformationFacts.cs      what we know about the third-party plugin
+Injection/FileTransformationRegistrar.cs  detect it, register the transformation
+Injection/InjectionStartupService.cs      IHostedService that runs it once at startup
+Injection/IndexHtmlTransformation.cs      the callback: inline the script into index.html
+Injection/InjectionState.cs               the outcome, published on the config page
+web/src/inject.ts                         the script itself
+```
+
+How it works: at startup we look for the **File Transformation** plugin
+(`5e87cc92-571a-4d8d-8d98-d2d4147f9f90`) and ask it to run a callback over
+`index.html`. The callback inlines `subtitleSyncInject.js`, which watches for
+the client's `...` menu opening and adds a "Sync subtitles..." item beneath the
+client's own "Edit subtitles" entry, linking to the sync page with that item's
+id.
+
+Four things are worth knowing before changing any of it.
+
+- **File Transformation cannot be depended on.** Jellyfin 10.11 has no plugin
+  dependency mechanism at all, so the user has to install it themselves. If it
+  is absent, the menu item is absent and everything else works unchanged. The
+  Dashboard route is the primary one. The configuration page says so, with the
+  repository URL, and `GET /SubtitleSync/Status` is where that comes from.
+- **The item is gated on `IsAdministrator`, not `EnableSubtitleManagement`.**
+  The 10.11 client puts `configurationpage` behind an admin route guard, so a
+  non-admin who clicked it would be bounced to `#/home`. See #12.
+- **The injected script must never throw**, and neither must the C# callback.
+  File Transformation invokes the callback by reflection and casts the result to
+  `string` unconditionally, in the middle of serving `index.html`. An exception
+  there is a web client that will not load. It must also never return a
+  *shorter* string than it was given: the result is written over the original
+  stream without truncating it.
+- **Newtonsoft.Json is referenced with `ExcludeAssets=runtime` on purpose.**
+  Shipping a copy beside our DLL would give us a different `JObject` type
+  identity from the one File Transformation binds to, and the registration call
+  would fail. Both of us bind to the server's `/jellyfin/Newtonsoft.Json.dll`.
+
+`index.html` is the target rather than the chunk that actually builds the menu:
+on a real 10.11.11 install that chunk is `55802.9a5b7bc258c2f90abe5e.chunk.js`,
+a webpack module id plus a content hash, minified, and not marked `no-cache`.
 
 ## Building
 

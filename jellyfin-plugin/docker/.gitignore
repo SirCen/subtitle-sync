@@ -5,3 +5,9 @@
 # Plugin DLLs dropped in by hand from the dotnet build output.
 /plugins/SubtitleSync/*
 !/plugins/SubtitleSync/.gitkeep
+
+# The File Transformation plugin, downloaded into place by
+# scripts/file-transformation.mjs. Third-party binaries, pinned by checksum at
+# install time - never committed.
+/plugins/FileTransformation/*
+!/plugins/FileTransformation/.gitkeep

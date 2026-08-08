@@ -48,6 +48,14 @@ const OUTFILE = resolve(here, "dist", "subtitleSync.js");
 // rebuilding the shared bundle.
 const PAGE_ENTRY = resolve(here, "src", "page", "main.ts");
 const PAGE_OUTFILE = resolve(here, "dist", "subtitleSyncPage.js");
+
+// The Subtitles-menu injection (#13). A THIRD bundle, and the odd one out: it is
+// not served over HTTP at all. It is inlined verbatim into /web/index.html by
+// the File Transformation plugin, so it must be a complete, self-executing
+// script that depends on nothing else having loaded - not window.SubtitleSync,
+// not the page bundle, not even document.body.
+const INJECT_ENTRY = resolve(here, "src", "inject.ts");
+const INJECT_OUTFILE = resolve(here, "dist", "subtitleSyncInject.js");
 const FVAD_SHIM = resolve(here, "src", "fvadWasm.ts");
 const FFMPEG_STUB = resolve(here, "src", "ffmpegUnavailable.ts");
 
@@ -228,6 +236,61 @@ async function assertPageSelfContained(file, metafile) {
   return size;
 }
 
+/**
+ * The injected script's own check.
+ *
+ * Two things matter here that do not matter for the other two bundles. It is
+ * inlined into someone else's HTML document, so a literal `</script>` anywhere
+ * in it - even inside a string - would end the tag early and spray the rest of
+ * the bundle across the page as text. And it must stay small: this is bytes on
+ * every single page load of the web client, for every user, whether or not they
+ * ever open a context menu.
+ */
+async function assertInjectable(file, metafile) {
+  const code = await readFile(file, "utf8");
+
+  for (const [pattern, what] of FORBIDDEN) {
+    const hit = code.match(pattern);
+    if (hit) {
+      throw new Error(
+        `inject bundle is not self-contained: found ${what} (${JSON.stringify(hit[0])}).`,
+      );
+    }
+  }
+
+  if (/<\/script/i.test(code)) {
+    throw new Error(
+      "inject bundle contains a literal </script>, which would break the " +
+        "document it is inlined into. Split the string.",
+    );
+  }
+
+  if (metafile) {
+    const inputs = Object.keys(metafile.inputs).map((p) => p.replace(/\\/g, "/"));
+    const stowaways = inputs.filter(
+      (p) => p.includes("node_modules/") || /(^|\/)lib\//.test(p),
+    );
+    if (stowaways.length) {
+      throw new Error(
+        `inject bundle pulled in ${stowaways.join(", ")}. It is inlined into every ` +
+          "page load of the web client and must stay a single standalone file.",
+      );
+    }
+  }
+
+  const { size } = await stat(file);
+  if (size > 16_000) {
+    throw new Error(
+      `inject bundle is ${size} bytes. It is inlined into index.html on every ` +
+        "page load; keep it under 16 KB or move the work to a fetched script.",
+    );
+  }
+  if (size < 1_000) {
+    throw new Error(`inject bundle is implausibly small (${size} bytes)`);
+  }
+  return size;
+}
+
 // ---------------------------------------------------------------------------
 // Build
 // ---------------------------------------------------------------------------
@@ -271,9 +334,18 @@ const pageOptions = {
   globalName: undefined,
 };
 
+const injectOptions = {
+  ...options,
+  entryPoints: [INJECT_ENTRY],
+  outfile: INJECT_OUTFILE,
+  // No global name: it installs one flag on `window` and is otherwise invisible.
+  globalName: undefined,
+};
+
 const builds = [
   { name: "bundle", options, outfile: OUTFILE, verify: assertSelfContained },
   { name: "page", options: pageOptions, outfile: PAGE_OUTFILE, verify: assertPageSelfContained },
+  { name: "inject", options: injectOptions, outfile: INJECT_OUTFILE, verify: assertInjectable },
 ];
 
 await mkdir(dirname(OUTFILE), { recursive: true });

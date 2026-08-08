@@ -1,24 +1,19 @@
 /**
- * The plugin-specific smoke tests from issue #19.
+ * The plugin-specific smoke tests from issue #19. Nothing here is skipped any
+ * more: every issue these were written ahead of has landed.
  *
- * THE SKIPPED ONES ARE SKIPPED ON PURPOSE: the behaviour they assert does not
- * exist yet. They are written out in full rather than left as TODOs so that
- * whoever lands each piece has a ready-made check: drop the built DLL into
- * jellyfin-plugin/docker/plugins/SubtitleSync/, restart the container, remove
- * the `.skip`, and the test either passes or tells you why not.
+ * Written against a live 10.11.11 client rather than guessed, which matters most
+ * for the injection block - the client has no "Subtitles" button, the entry
+ * lives inside the "..." menu, and after a client-side navigation the previous
+ * page's markup is still in the DOM. All three caught a wrong selector here.
  *
- * The two Dashboard tests are live as of #3.
- *
- * Enabling issues:
- *   #3  scaffold the plugin           -> the two Dashboard tests
- *   #13 File Transformation injection -> the banner and Subtitles-menu tests
- *   #8  save endpoint                 -> the save block, live as of that issue
- *   #12 sync page UI                  -> the sync page block, live as of that
- *                                        issue
- *
- * Selectors below are the current best guess at the 10.11 web client's DOM and
- * are expected to need adjustment when first run for real. That is the point of
- * having the harness: they can be adjusted against a live server in minutes.
+ * WHAT THE SERVER HAS TO LOOK LIKE. `npm run jf:up` does all of it:
+ *   - the built plugin DLL staged in docker/plugins/SubtitleSync/
+ *   - the File Transformation plugin installed (docker/scripts/file-transformation.mjs)
+ *   - the `viewer` account holding EnableSubtitleManagement but NOT admin
+ * The last one is not incidental. Without subtitle rights the viewer sees no
+ * "Edit subtitles" entry either, and the "not for a non-admin" test would pass
+ * without proving anything.
  */
 
 import { readFile, rm } from "node:fs/promises";
@@ -36,8 +31,10 @@ import {
   listPlugins,
   loginAsAdmin,
   loginAsViewer,
+  MOVIE_NAME,
   refreshItem,
   saveSyncedSubtitle,
+  spaNavigateToItem,
   SYNCABLE_KNOWN_OFFSET,
   SYNCABLE_NAME,
   viewerSession,
@@ -47,10 +44,41 @@ import {
 const PLUGIN_NAME = "Subtitle Sync";
 const MENU_ITEM_TEXT = "Sync subtitles";
 
-/** Opens the Subtitles menu on an item detail page. */
-async function openSubtitlesMenu(page: Page): Promise<void> {
-  await page.getByRole("button", { name: /subtitle/i }).first().click();
+/** `data-id` the injected script stamps on its own menu item. */
+const MENU_ITEM_ID = "subtitlesync-sync";
+
+/** The client's own Subtitles entry, which ours is inserted beneath. */
+const ANCHOR_MENU_ITEM_ID = "editsubtitles";
+
+/**
+ * Opens the context menu that carries the Subtitles entry.
+ *
+ * There is no "Subtitles" button on a 10.11 detail page. The entry lives inside
+ * the "..." overflow menu, whose button is `.btnMoreCommands` (title "More") and
+ * whose menu is a `.actionSheet` dialog of `button[data-id]` items. Checked
+ * against a live 10.11.11 client, not guessed.
+ *
+ * `visible: true` on the button because the client keeps the markup of pages you
+ * have already visited in the DOM.
+ */
+async function openContextMenu(page: Page): Promise<void> {
+  await page.locator(".btnMoreCommands").filter({ visible: true }).first().click();
   await expect(page.locator(".actionSheetContent")).toBeVisible();
+}
+
+/**
+ * Closes it again.
+ *
+ * A real pointer event outside the dialog, because that is the only thing that
+ * works. Checked against 10.11.11: `page.keyboard.press("Escape")` does not
+ * close it, a synthetic `keydown` on `document` or on the dialog does not close
+ * it, and a programmatic `.click()` on `.dialogBackdrop` does not either - the
+ * client is listening for a trusted pointer event. `history.back()` also works
+ * but changes the URL, which this test is about.
+ */
+async function closeContextMenu(page: Page): Promise<void> {
+  await page.mouse.click(5, 5);
+  await expect(page.locator(".actionSheet")).toHaveCount(0);
 }
 
 test.describe("plugin: Dashboard integration", () => {
@@ -80,70 +108,184 @@ test.describe("plugin: Dashboard integration", () => {
     await expect(page.locator("form, .pluginConfigurationPage").first()).toBeVisible();
   });
 
-  // ENABLE WITH #13. Deliberately asserts the *absence* of File Transformation
-  // is handled: this harness installs no other plugins, so the banner is the
-  // expected state until one is added on purpose.
-  test.skip("config page shows the File Transformation install banner when it is absent", async ({
+  /**
+   * The install note, driven by forcing the server's answer rather than by
+   * uninstalling File Transformation.
+   *
+   * The harness now installs File Transformation - the three specs below cannot
+   * run without it - so the absent case cannot also be the live state of the
+   * server. Injecting the response is how the rest of this suite handles the
+   * same problem (see the refused-save test), and it buys something a real
+   * uninstall would not: the banner is asserted against a *specific* status
+   * value, so it keeps working when the reason changes.
+   *
+   * The genuine uninstalled path - plugin still loads, client still works,
+   * Dashboard route still works - is checked by the assertions at the end of
+   * this test plus `npm run jf:ft:uninstall`, documented in docker/README.md.
+   */
+  test("config page shows the File Transformation install note when it is absent", async ({
     page,
   }) => {
     await loginAsAdmin(page);
+
+    await page.route("**/SubtitleSync/Status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          Availability: "NotInstalled",
+          MenuItemActive: false,
+          FileTransformationVersion: null,
+          Detail:
+            "File Transformation is not installed, so the Subtitles menu item will not appear.",
+          RepositoryUrl: "https://www.iamparadox.dev/jellyfin/plugins/manifest.json",
+          ProjectUrl: "https://github.com/IAmParadox27/jellyfin-plugin-file-transformation",
+          PluginName: "File Transformation",
+        }),
+      }),
+    );
+
     await page.goto(`/web/#/configurationpage?name=${encodeURIComponent(PLUGIN_NAME)}`);
 
-    await expect(page.getByText(/File Transformation/i).first()).toBeVisible();
+    const notice = page.locator("#fileTransformationNotice");
+    await expect(notice).toBeVisible({ timeout: 60_000 });
+    await expect(notice).toContainText(/File Transformation/i);
+
+    // It must say how to get it, with the repository URL - that is the whole
+    // point of the note, since Jellyfin cannot install it for us.
+    await expect(page.locator("#fileTransformationHowTo")).toBeVisible();
+    await expect(page.locator("#fileTransformationRepo")).toHaveText(
+      "https://www.iamparadox.dev/jellyfin/plugins/manifest.json",
+    );
 
     // And the Dashboard flow still works without it: the sync page must be
     // reachable directly, not only via the injected menu item.
     const admin = await adminSession();
     const itemId = await findFixtureItemId(admin);
-    await page.goto(`/web/#/configurationpage?name=SubtitleSync&itemId=${itemId}`);
-    await expect(page.locator("form, .pluginConfigurationPage").first()).toBeVisible();
+    await page.goto(`/web/#/configurationpage?name=SubtitleSyncPage&itemId=${itemId}`);
+    await expect(page.locator("#subtitleSyncPage")).toBeVisible({ timeout: 60_000 });
+  });
+
+  /**
+   * The other half, and the one that would otherwise rot: with File
+   * Transformation genuinely installed the note must NOT appear. A banner that
+   * is always on is indistinguishable from a banner nobody wired up.
+   */
+  test("config page stays quiet when File Transformation is working", async ({ page }) => {
+    await loginAsAdmin(page);
+    await page.goto(`/web/#/configurationpage?name=${encodeURIComponent(PLUGIN_NAME)}`);
+
+    // Wait for something the page loads asynchronously, so "hidden" is a
+    // verdict rather than a race with the fetch.
+    await expect(page.locator("#signalCacheReadout")).not.toHaveText("Loading...", {
+      timeout: 60_000,
+    });
+    await expect(page.locator("#fileTransformationNotice")).toBeHidden();
   });
 });
 
+/**
+ * The riskiest behaviour in the whole feature, so these are the tests that
+ * matter most. They need the File Transformation plugin installed in the
+ * container; `npm run jf:up` does that (docker/scripts/file-transformation.mjs).
+ *
+ * If they start failing after a Jellyfin update, read the failure carefully
+ * before "fixing" it. The correct outcome of a client whose markup has changed
+ * is that the item is ABSENT, quietly, and everything else still works - so a
+ * failure here is information, not necessarily a bug to paper over.
+ */
 test.describe("plugin: Subtitles menu injection (#13)", () => {
-  // ENABLE WITH #13, and only once the File Transformation plugin is installed
-  // into the harness container. Injection is the riskiest behaviour in the whole
-  // feature, so this is the test that matters most.
-  test.skip('"Sync subtitles..." appears in the Subtitles menu for an admin', async ({ page }) => {
+  test('"Sync subtitles..." appears in the Subtitles menu for an admin', async ({ page }) => {
     const admin = await adminSession();
     const itemId = await findFixtureItemId(admin);
 
     await loginAsAdmin(page);
     await gotoItemDetail(page, itemId);
-    await openSubtitlesMenu(page);
+    await openContextMenu(page);
 
-    await expect(page.getByText(MENU_ITEM_TEXT, { exact: false })).toBeVisible();
+    const item = page.locator(`.actionSheet button[data-id="${MENU_ITEM_ID}"]`);
+    await expect(item).toBeVisible();
+    await expect(item).toContainText(MENU_ITEM_TEXT);
+
+    // Directly beneath the client's own Subtitles entry, which is where a user
+    // looking for this would look.
+    const ids = await page
+      .locator(".actionSheet button[data-id]")
+      .evaluateAll((buttons) => buttons.map((b) => b.getAttribute("data-id")));
+    expect(ids.indexOf(MENU_ITEM_ID)).toBe(ids.indexOf(ANCHOR_MENU_ITEM_ID) + 1);
+
+    // And it goes somewhere: the sync page, for THIS item, with the menu closed
+    // behind it.
+    await item.click();
+    await expect(page).toHaveURL(new RegExp(`configurationpage\\?name=SubtitleSyncPage&itemId=${itemId}`));
+    await expect(page.locator(".actionSheet")).toHaveCount(0);
+    await expect(page.locator("#ssItemName")).toHaveText(MOVIE_NAME, { timeout: 60_000 });
   });
 
-  // ENABLE WITH #13. Permission checks enforced only server-side still leak the
-  // affordance, so this asserts the menu item itself is hidden.
-  test.skip("the menu item does not appear for a non-admin user", async ({ page }) => {
+  /**
+   * The permission gate, and the reason it is IsAdministrator rather than
+   * EnableSubtitleManagement.
+   *
+   * The harness viewer has EnableSubtitleManagement on purpose, so the client
+   * emits its own "Edit subtitles" entry for them - the exact menu our script
+   * attaches to. Without that this test would pass vacuously: a user with no
+   * subtitle rights has no anchor to attach to either. The assertion below that
+   * the anchor IS present is what keeps the test honest.
+   *
+   * They are excluded because the 10.11 client puts plugin configuration pages
+   * behind an admin route guard, so the page would bounce them to #/home. See
+   * issue #12.
+   */
+  test("the menu item does not appear for a non-admin user", async ({ page }) => {
     const admin = await adminSession();
     const itemId = await findFixtureItemId(admin);
 
     await loginAsViewer(page);
     await gotoItemDetail(page, itemId);
-    await openSubtitlesMenu(page);
+    await openContextMenu(page);
 
-    await expect(page.getByText(MENU_ITEM_TEXT, { exact: false })).toHaveCount(0);
+    await expect(
+      page.locator(`.actionSheet button[data-id="${ANCHOR_MENU_ITEM_ID}"]`),
+      "the viewer must have EnableSubtitleManagement, or this test proves nothing",
+    ).toBeVisible();
+
+    await expect(page.locator(`.actionSheet button[data-id="${MENU_ITEM_ID}"]`)).toHaveCount(0);
   });
 
-  // ENABLE WITH #13. The SPA requirement from the issue: the injection has to
-  // survive client-side navigation between detail pages without a reload.
-  test.skip("the menu item survives SPA navigation between pages", async ({ page }) => {
+  /**
+   * The SPA requirement from the issue: the injection has to survive
+   * client-side navigation between detail pages without a reload.
+   *
+   * Between two DIFFERENT items, because the failure this guards against is not
+   * only "the item stops appearing" but "the item appears and points at the
+   * page you came from".
+   */
+  test("the menu item survives SPA navigation between pages", async ({ page }) => {
     const admin = await adminSession();
-    const itemId = await findFixtureItemId(admin);
+    const first = await findFixtureItemId(admin);
+    const second = await findSyncableItemId(admin);
 
     await loginAsAdmin(page);
-    await gotoItemDetail(page, itemId);
+    await gotoItemDetail(page, first);
+    await openContextMenu(page);
+    await expect(page.locator(`.actionSheet button[data-id="${MENU_ITEM_ID}"]`)).toBeVisible();
+    await closeContextMenu(page);
 
-    // Leave to the home screen and come back without a full page load.
-    await page.locator(".headerHomeButton").click();
-    await expect(page.locator(".itemName")).toHaveCount(0);
-    await page.goBack();
+    let loads = 0;
+    page.on("load", () => loads++);
 
-    await openSubtitlesMenu(page);
-    await expect(page.getByText(MENU_ITEM_TEXT, { exact: false })).toBeVisible();
+    await spaNavigateToItem(page, second);
+    await openContextMenu(page);
+
+    const item = page.locator(`.actionSheet button[data-id="${MENU_ITEM_ID}"]`);
+    await expect(item).toBeVisible();
+
+    expect(loads, "the navigation under test has to be client-side").toBe(0);
+
+    // The item id has to have moved with the page, not stuck on the first one.
+    await item.click();
+    await expect(page).toHaveURL(new RegExp(`itemId=${second}`));
+    await expect(page.locator("#ssItemName")).toHaveText(SYNCABLE_NAME, { timeout: 60_000 });
   });
 });
 

@@ -1132,7 +1132,15 @@ public class TransformationRegistrationPayload
 }
 ```
 
-`fileNamePattern` is a **regex** matched against the requested path. Three delivery mechanisms, tried
+`fileNamePattern` is a **regex** matched against the requested path - and, found the hard way during
+#13, it is matched against the path spelled **two different ways**.
+`WebFileTransformationService.NeedsTransformation` is called with the static file middleware's
+subpath, `/index.html`, and tests the regex against it unmodified;
+`RunTransformation` then strips the leading slash and tests the same regex against `index.html`. The
+dictionary fast-path in between is keyed on the *pattern*, not on a filename, so it never helps. A
+pattern of `^index\.html$` therefore matches neither call and the transformation silently never runs.
+`(^|/)index\.html$` matches both. IAmParadox's own plugins sidestep this by passing a bare
+`index.html`, which as a regex matches anywhere in either spelling. Three delivery mechanisms, tried
 in order by
 [`TransformationHelper.ApplyTransformation`](https://github.com/IAmParadox27/jellyfin-plugin-file-transformation/blob/2.5.11.0/src/Jellyfin.Plugin.FileTransformation/Helpers/TransformationHelper.cs):
 in-process reflection callback (`callbackAssembly`/`callbackClass`/`callbackMethod`), named pipe
@@ -1307,6 +1315,11 @@ output: {
 
 so the File Transformation `fileNamePattern` regex would have to be hash-tolerant, and the search text
 would be matched against **minified** output. This is the brittle path.
+
+> **Settled during #13, against a live 10.11.11 container:** the chunk is
+> `55802.9a5b7bc258c2f90abe5e.chunk.js`. Both halves of the name are unstable - `55802` is a webpack
+> module id and the rest is a content hash - so there is nothing here a pattern could safely anchor
+> to. `index.html` it is.
 
 Also note that File Transformation only forces `Cache-Control: no-cache` for `index.html` and
 `main.jellyfin.bundle.js` on 10.11
@@ -1570,11 +1583,11 @@ Things we could not verify against a primary source. Do not build on these witho
   rebuild is required.
 - **Whether `EncoderLocationType` was renamed rather than removed.** A recursive tree scan at v10.11.11
   found no `EncoderLocationType` and no `FFmpegLocation` file, and nothing obviously equivalent.
-- **Which webpack chunk `itemContextMenu.js` lands in at 10.11, and the exact content-hashed filename.**
-  This can only be determined from a built `jellyfin-web` artefact, not from source. Anyone writing the
-  File Transformation regex for issue #13 must check a real installed `/usr/share/jellyfin/web`
-  directory. This is a further argument for the `index.html` script-injection approach over chunk
-  patching.
+- ~~**Which webpack chunk `itemContextMenu.js` lands in at 10.11, and the exact content-hashed
+  filename.**~~ **SETTLED** during #13, against the running `jellyfin/jellyfin:10.11.11` container:
+  it is `55802.9a5b7bc258c2f90abe5e.chunk.js`. Both halves of that name are unstable - `55802` is a
+  webpack module id and the rest is a content hash - and the contents are minified. This confirmed
+  the `index.html` script-injection approach over chunk patching.
 - **Whether Jellyfin 12.0 introduces a supported client plugin API.** Not investigated; out of scope for
   10.11. Note that `master` is `v12.0-rc4` and the item detail page is being rebuilt in React under
   `src/apps/modern`, so our injection will need rework for 12.0 regardless.

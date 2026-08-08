@@ -159,24 +159,42 @@ export async function authenticate(username, password) {
 }
 
 /**
- * Creates a plain, non-admin user if it is missing. Jellyfin's default policy
- * for a new user has IsAdministrator false, which is the whole point: it gives
- * the "menu item must not appear for a non-admin" test (#13) a real subject.
+ * Creates a non-admin user with subtitle-management rights, if it is missing.
+ *
+ * The combination is deliberate and is what makes the #13 non-admin test worth
+ * running. A user with no subtitle rights never sees the client's own "Edit
+ * subtitles" entry either, so a test against one would pass whether or not our
+ * injected item checked anything at all. With EnableSubtitleManagement on, the
+ * client emits "Edit subtitles" - the exact menu our script attaches to - and
+ * the item's absence proves the IsAdministrator gate is doing the work.
+ *
+ * The gate has to be IsAdministrator rather than EnableSubtitleManagement
+ * because the 10.11 client puts plugin configuration pages behind an
+ * admin-level route guard: this user would be bounced to #/home before the sync
+ * page loaded. See issue #12.
  */
 export async function ensureUser({ token, username, password, log = console.log }) {
   const users = await call("GET", "/Users", { token });
   const existing = users.find((u) => u.Name === username);
-  if (existing) {
-    log(`user "${username}": already exists`);
-    return existing.Id;
+
+  const user =
+    existing ??
+    (await call("POST", "/Users/New", {
+      token,
+      body: { Name: username, Password: password },
+    }));
+
+  log(`user "${username}": ${existing ? "already exists" : "created (non-admin)"}`);
+
+  if (!user.Policy?.EnableSubtitleManagement) {
+    await call("POST", `/Users/${user.Id}/Policy`, {
+      token,
+      body: { ...user.Policy, IsAdministrator: false, EnableSubtitleManagement: true },
+    });
+    log(`user "${username}": granted EnableSubtitleManagement (still not an admin)`);
   }
 
-  const created = await call("POST", "/Users/New", {
-    token,
-    body: { Name: username, Password: password },
-  });
-  log(`user "${username}": created (non-admin)`);
-  return created.Id;
+  return user.Id;
 }
 
 /**

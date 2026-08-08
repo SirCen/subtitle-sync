@@ -15,6 +15,9 @@
     "jf:up": "node jellyfin-plugin/docker/scripts/setup.mjs",
     "jf:down": "node jellyfin-plugin/docker/scripts/teardown.mjs",
     "jf:logs": "docker compose -f jellyfin-plugin/docker/docker-compose.yml logs -f jellyfin",
+    "jf:ft": "node jellyfin-plugin/docker/scripts/file-transformation.mjs install",
+    "jf:ft:uninstall": "node jellyfin-plugin/docker/scripts/file-transformation.mjs uninstall",
+    "jf:ft:status": "node jellyfin-plugin/docker/scripts/file-transformation.mjs status",
     "jf:e2e": "playwright test"
   },
   "dependencies": {

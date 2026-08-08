@@ -41,10 +41,34 @@
 
     <!--
       Needed by issue #13: the File Transformation plugin's RegisterTransformation
-      takes a Newtonsoft.Json.Linq.JObject. Referenced now so the dependency is
-      declared in one place; no injection logic exists yet.
+      takes a Newtonsoft.Json.Linq.JObject, so we have to be able to build one.
+
+      ExcludeAssets=runtime, and this one is load-bearing rather than tidiness.
+      Jellyfin loads each plugin into its own AssemblyLoadContext that resolves
+      from the plugin's own directory first. Ship a copy of Newtonsoft.Json
+      beside our DLL and we get OUR JObject type, while File Transformation -
+      which ships no copy and binds to the server's own
+      /jellyfin/Newtonsoft.Json.dll - expects THEIRS. Same name, same version,
+      different type identity: the reflected call fails with an argument
+      mismatch and the menu item silently never appears. Excluding the runtime
+      asset makes both of us bind to the server's copy, which is exactly what
+      every plugin in File Transformation's own ecosystem does.
     -->
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3">
+      <ExcludeAssets>runtime</ExcludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The index.html transformation's seams - the pure Inject(), the marker, the
+      callback triple - are internal because nothing outside this assembly should
+      call them, but they are exactly what needs testing: this code runs inside a
+      third-party plugin's request pipeline and its failure modes are invisible
+      from the outside. The alternative is widening the public API of a plugin to
+      suit its tests.
+    -->
+    <InternalsVisibleTo Include="Jellyfin.Plugin.SubtitleSync.Tests" />
   </ItemGroup>
 
   <ItemGroup>
@@ -59,6 +83,7 @@
     <WebProjectDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\web'))</WebProjectDir>
     <WebBundlePath>$(WebProjectDir)\dist\subtitleSync.js</WebBundlePath>
     <WebPageBundlePath>$(WebProjectDir)\dist\subtitleSyncPage.js</WebPageBundlePath>
+    <WebInjectBundlePath>$(WebProjectDir)\dist\subtitleSyncInject.js</WebInjectBundlePath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -82,6 +107,16 @@
     -->
     <EmbeddedResource Include="$(WebPageBundlePath)"
                       LogicalName="Jellyfin.Plugin.SubtitleSync.Web.subtitleSyncPage.js" />
+
+    <!--
+      The Subtitles-menu script (#13). Unlike the other two this is never served
+      over HTTP: Injection/IndexHtmlTransformation.cs reads it out of the
+      assembly and inlines it into /web/index.html. Embedding it rather than
+      serving it means the script can never be a stale cached copy of an older
+      build, and costs one fewer request on every page load of the web client.
+    -->
+    <EmbeddedResource Include="$(WebInjectBundlePath)"
+                      LogicalName="Jellyfin.Plugin.SubtitleSync.Web.subtitleSyncInject.js" />
   </ItemGroup>
 
   <!--
@@ -120,6 +155,8 @@
            Text="The browser bundle $(WebBundlePath) does not exist. Run `npm run plugin:bundle` from $(RepoRoot)." />
     <Error Condition="!Exists('$(WebPageBundlePath)')"
            Text="The sync page bundle $(WebPageBundlePath) does not exist. Run `npm run plugin:bundle` from $(RepoRoot)." />
+    <Error Condition="!Exists('$(WebInjectBundlePath)')"
+           Text="The injected menu-item bundle $(WebInjectBundlePath) does not exist. Run `npm run plugin:bundle` from $(RepoRoot)." />
   </Target>
 
 </Project>

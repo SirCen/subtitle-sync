@@ -23,6 +23,41 @@
           <h2>Subtitle Sync</h2>
 
           <!--
+            The Subtitles-menu item (#13) needs a third-party plugin, and
+            Jellyfin 10.11 has no dependency mechanism to install it for us - a
+            `dependencies` array in a repository manifest is silently discarded.
+            So this is the only place an administrator can find out why the menu
+            item is or is not there.
+
+            Hidden unless there is something to say. This is a note, not a nag:
+            the Dashboard link below is the primary route to the sync page and
+            works whether or not File Transformation is installed.
+          -->
+          <div id="fileTransformationNotice" class="verticalSection hide">
+            <div id="fileTransformationDetail" class="fieldDescription"></div>
+            <div id="fileTransformationHowTo" class="fieldDescription hide">
+              To add it: Dashboard &gt; Plugins &gt; Repositories &gt; add
+              <code id="fileTransformationRepo"></code>, then install
+              <span id="fileTransformationName"></span> from the catalogue and
+              restart the server. Its source and its own notes are at
+              <a
+                id="fileTransformationProject"
+                is="emby-linkbutton"
+                class="button-link emby-button"
+                target="_blank"
+                rel="noopener noreferrer"
+                href="#"
+              ></a
+              >.
+            </div>
+            <div class="fieldDescription">
+              It patches the Jellyfin server at runtime and is not maintained by
+              this project, so it can break on a Jellyfin update. Nothing else
+              here depends on it.
+            </div>
+          </div>
+
+          <!--
             The way in. Dashboard is the PRIMARY route to the sync page, not a
             fallback: the Subtitles-menu item (#13) is injected by a third-party
             plugin that patches the server at runtime and may not be installed,
@@ -183,6 +218,60 @@
             );
           }
 
+          /**
+           * Shows why the Subtitles menu item is or is not there.
+           *
+           * Deliberately silent in the working case. The only states worth a
+           * paragraph are the ones where the administrator has something to do
+           * about it, or where they installed the dependency and it is not
+           * working - which is the state a naive "is the item there?" check
+           * would report as "not installed" and send them round in circles.
+           */
+          function renderInjectionStatus(page, status) {
+            var notice = page.querySelector('#fileTransformationNotice');
+            var howTo = page.querySelector('#fileTransformationHowTo');
+
+            if (!notice) {
+              return;
+            }
+
+            if (status.MenuItemActive) {
+              notice.classList.add('hide');
+              return;
+            }
+
+            page.querySelector('#fileTransformationDetail').textContent =
+              status.Detail ||
+              status.PluginName + ' is not available, so the Subtitles menu item will not appear.';
+
+            page.querySelector('#fileTransformationRepo').textContent = status.RepositoryUrl;
+            page.querySelector('#fileTransformationName').textContent = status.PluginName;
+
+            var project = page.querySelector('#fileTransformationProject');
+            project.href = status.ProjectUrl;
+            project.textContent = status.ProjectUrl;
+
+            // "Install it" is only advice worth giving when it is not installed.
+            // If it is installed and still not working, saying that would be
+            // wrong and confusing.
+            howTo.classList.toggle('hide', status.Availability !== 'NotInstalled');
+
+            notice.classList.remove('hide');
+          }
+
+          function loadInjectionStatus(page) {
+            return ApiClient.getJSON(ApiClient.getUrl('SubtitleSync/Status')).then(
+              function (status) {
+                renderInjectionStatus(page, status);
+              },
+              function () {
+                // An unreachable status endpoint says nothing useful about the
+                // menu item, so it says nothing at all.
+                page.querySelector('#fileTransformationNotice').classList.add('hide');
+              }
+            );
+          }
+
           function load(page) {
             Dashboard.showLoadingMsg();
             ApiClient.getPluginConfiguration(pluginId).then(function (config) {
@@ -194,6 +283,7 @@
             });
 
             loadCacheStats(page);
+            loadInjectionStatus(page);
           }
 
           function save(page) {
