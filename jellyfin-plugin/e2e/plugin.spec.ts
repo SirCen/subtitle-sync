@@ -122,14 +122,33 @@ test.describe("plugin: Dashboard integration", () => {
    * The genuine uninstalled path - plugin still loads, client still works,
    * Dashboard route still works - is checked by the assertions at the end of
    * this test plus `npm run jf:ft:uninstall`, documented in docker/README.md.
+   *
+   * ON THE TWO ASSERTIONS BEFORE THE BANNER. Injecting the answer means this
+   * test has two ways to fail that both LOOK like "the banner never appeared",
+   * and neither is about the banner:
+   *
+   *   1. The config page never rendered at all, so there was no banner to show.
+   *   2. The stub never intercepted, so the banner was answering for the
+   *      harness's REAL File Transformation - which is installed, so the banner
+   *      is correctly hidden and the test is asserting nothing.
+   *
+   * Both used to surface as a mute 60-second timeout on #fileTransformationNotice
+   * with nothing to read. Checked by deliberately causing each: aborting the
+   * config page HTML, and not registering the route. Case 2 matters most,
+   * because a test that silently stops stubbing is a test that has quietly
+   * turned into its own complement below.
    */
   test("config page shows the File Transformation install note when it is absent", async ({
     page,
   }) => {
     await loginAsAdmin(page);
 
-    await page.route("**/SubtitleSync/Status", (route) =>
-      route.fulfill({
+    /** How many times the injected answer was actually served. */
+    let stubbedStatusResponses = 0;
+
+    await page.route("**/SubtitleSync/Status", (route) => {
+      stubbedStatusResponses++;
+      return route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
@@ -142,10 +161,25 @@ test.describe("plugin: Dashboard integration", () => {
           ProjectUrl: "https://github.com/IAmParadox27/jellyfin-plugin-file-transformation",
           PluginName: "File Transformation",
         }),
-      }),
-    );
+      });
+    });
 
     await page.goto(`/web/#/configurationpage?name=${encodeURIComponent(PLUGIN_NAME)}`);
+
+    await expect(
+      page.locator("#subtitleSyncConfigPage"),
+      "the config page itself never rendered, so nothing below is about the banner",
+    ).toBeVisible({ timeout: 60_000 });
+
+    await expect
+      .poll(() => stubbedStatusResponses, {
+        message:
+          "the injected NotInstalled answer was never served, so the banner below is " +
+          "reporting the harness's real File Transformation - which IS installed - " +
+          "rather than the absent case this test is about",
+        timeout: 30_000,
+      })
+      .toBeGreaterThan(0);
 
     const notice = page.locator("#fileTransformationNotice");
     await expect(notice).toBeVisible({ timeout: 60_000 });
