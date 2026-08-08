@@ -13,6 +13,7 @@
 // If the plugin's behaviour changes, this page is wrong until it is edited.
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -26,6 +27,32 @@ const FILE_TRANSFORMATION_REPO =
   "https://www.iamparadox.dev/jellyfin/plugins/manifest.json";
 
 const RELEASES_URL = "https://github.com/SirCen/subtitle-sync/releases";
+
+/**
+ * The screenshots, captured from a real Jellyfin 10.11.11 server by
+ * `npm run jf:screenshots` (jellyfin-plugin/e2e/screenshots.capture.ts).
+ *
+ * Re-run that rather than editing these by hand: the sync result is a genuine
+ * run against the project's Structured Clip fixture, whose track is displaced by
+ * a known -3.2 s, and the capture asserts it recovered that before it writes the
+ * file. A hand-taken replacement carries no such guarantee.
+ *
+ * `width` and `height` are the files' intrinsic pixel sizes, captured at 2x for
+ * sharpness on dense displays, so they are about twice the CSS width they are
+ * rendered at.
+ */
+const SHOTS = {
+  menu: {
+    src: "/plugin/jellyfin-subtitles-menu.png",
+    width: 2038,
+    height: 1032,
+  },
+  result: {
+    src: "/plugin/jellyfin-sync-result.png",
+    width: 1516,
+    height: 1460,
+  },
+} as const;
 
 // Metadata is resolved before the page body runs, so it is gated too - otherwise
 // the 404 served when the flag is off would still be titled "Jellyfin plugin".
@@ -89,7 +116,25 @@ function Hero() {
 function WhatItDoes() {
   return (
     <Section title="What it does">
-      <p className="text-sm leading-relaxed text-neutral-600 dark:text-neutral-400">
+      <Screenshot
+        shot={SHOTS.menu}
+        alt={
+          "A Jellyfin film detail page for a movie called Sample Clip, showing its " +
+          "video, audio and subtitle tracks, with the overflow menu open on the " +
+          "right. The menu lists the client's usual entries - Add to collection, " +
+          "Download, Edit metadata, Edit subtitles, Identify, Media Info - and " +
+          "directly beneath Edit subtitles is an extra entry, Sync subtitles..., " +
+          "added by this plugin."
+        }
+      >
+        Jellyfin&apos;s own overflow menu, with the plugin&apos;s entry sitting
+        under <strong>Edit subtitles</strong>. Note that this is the shortcut and
+        not the main route: it is the one entry point that also needs the File
+        Transformation plugin. Without it everything below still works from
+        Dashboard &gt; Plugins &gt; Subtitle Sync, which is why that is the path
+        this page calls primary.
+      </Screenshot>
+      <p className="mt-6 text-sm leading-relaxed text-neutral-600 dark:text-neutral-400">
         SRT timestamps are plain wall-clock times and carry no framerate, so a
         subtitle authored against a different release does not just sit at a
         fixed offset: it drifts further out the deeper into the episode you get.
@@ -272,6 +317,27 @@ function Use() {
           gives you exactly the same file to place yourself.
         </Step>
       </ol>
+      <Screenshot
+        shot={SHOTS.result}
+        alt={
+          "The plugin's sync page after a completed run. It reports a best match " +
+          "of ratio 1.0, offset only, at minus 3.200 seconds with a score of " +
+          "0.9094, 0.7% clear of the runner-up, and that 10 cues will be " +
+          "re-timed. A warning says the top two candidates scored similarly and " +
+          "are worth double-checking. Below it a table lists all six candidate " +
+          "ratios with the offset and score each one reached. Below that, an " +
+          "Adjust by hand block holds the recovered offset and ratio in editable " +
+          "fields, a preview reading “First cue moves from 00:00:04,220 to " +
+          "00:00:01,020”, and buttons to save as a new track or download the .srt."
+        }
+      >
+        A genuine run, not a staged one: this is the repository&apos;s{" "}
+        <Code>Structured Clip</Code> fixture, whose subtitle track is displaced
+        by exactly -3.2 s, and the page recovered -3.200 s. The warning is the
+        page doing its job rather than a fault - two ratios landed within a
+        percent of each other on a very short clip, and it says so instead of
+        presenting the winner as certain.
+      </Screenshot>
     </Section>
   );
 }
@@ -520,6 +586,55 @@ function Note({
     <p className={`mt-4 rounded-xl p-4 text-sm leading-relaxed ${toneClass}`}>
       {children}
     </p>
+  );
+}
+
+/**
+ * A screenshot of the Jellyfin UI, with a caption.
+ *
+ * Jellyfin's client is dark and always will be, so in this page's light theme
+ * every one of these is a near-black rectangle. Left bare that reads as a hole
+ * punched in the page, or worse as an image that failed to load. The border and
+ * the rounded corners are what make it read as a screen instead - they give the
+ * dark block an edge of its own rather than letting it bleed into the light
+ * background. In dark mode the same border keeps it from merging with the page,
+ * which is the mirror-image failure.
+ *
+ * No mat or inner padding on purpose: the two shots come from pages whose
+ * backgrounds are #080808 and #101010, so any single mat colour would show a
+ * seam against at least one of them.
+ *
+ * `alt` describes what is in the picture, for someone who cannot see it.
+ * `children` is the caption, which says why it is here - if the caption merely
+ * restates the alt text, one of the two is wasted.
+ */
+function Screenshot({
+  shot,
+  alt,
+  children,
+}: {
+  shot: { src: string; width: number; height: number };
+  alt: string;
+  children: ReactNode;
+}) {
+  return (
+    <figure className="mt-4">
+      <Image
+        src={shot.src}
+        width={shot.width}
+        height={shot.height}
+        alt={alt}
+        // The page column is max-w-3xl (768px) less 20px of padding either
+        // side, so on a desktop the image is never asked to be wider than
+        // ~728px however large the window is. Without this, Next assumes 100vw
+        // and serves a needlessly large file.
+        sizes="(min-width: 768px) 728px, 100vw"
+        className="h-auto w-full rounded-xl border border-neutral-300 shadow-sm dark:border-neutral-700"
+      />
+      <figcaption className="mt-2 text-xs leading-relaxed text-neutral-500 dark:text-neutral-500">
+        {children}
+      </figcaption>
+    </figure>
   );
 }
 

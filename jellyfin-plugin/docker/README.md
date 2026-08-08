@@ -348,6 +348,52 @@ what the harness is for:
 - **`/System/Info/Public` returns 503 with a plain-text body** for the first few
   seconds, so a 2xx alone is not a readiness signal.
 
+## The documentation screenshots
+
+The images on the site's `/plugin` page (#17) are captured from this harness,
+not taken by hand:
+
+```bash
+npm run jf:screenshots
+```
+
+That drives the same server the smoke tests use and rewrites
+`public/plugin/*.png`. Re-run it whenever the Jellyfin client or the plugin's
+own pages change appearance - a stale screenshot is a documentation bug that
+nothing else in the repository can catch.
+
+| | |
+| --- | --- |
+| Script | `jellyfin-plugin/e2e/screenshots.capture.ts` |
+| Config | `playwright.screenshots.config.ts` |
+| Output | `public/plugin/jellyfin-subtitles-menu.png`, `public/plugin/jellyfin-sync-result.png` |
+
+Two shots, because two things need showing: the **Sync subtitles...** entry in
+a detail page's overflow menu, which is the whole point of #13 and the only
+image that proves the feature appears where a user would look for it, and a
+**completed sync result**, which is the payoff.
+
+Three details worth knowing before changing it:
+
+- **It runs against Structured Clip, and asserts the answer.** The result shot
+  would be worthless taken from Sample Clip - see "Two movies" above. The
+  capture checks the recovered offset against `syncableKnownOffset` before it
+  writes the PNG, so a plugin regression fails the capture instead of quietly
+  shipping a screenshot of a wrong number.
+- **It is not part of `npx playwright test`.** The filename ends `.capture.ts`,
+  which Playwright's default `testMatch` (`*.spec.ts` / `*.test.ts`) does not
+  collect, so the main config cannot see it and needs no `testIgnore`. It runs
+  only through its own config.
+- **It writes nothing into the library.** Nothing in it clicks Save, so the
+  seeded media folders are left exactly as the seed script made them. There is
+  no cleanup step because there is nothing to clean up.
+
+Output is cropped to the relevant region at 2x and re-encoded as a palette PNG
+(via `sharp`) before being written, which is roughly a third of the bytes of
+what Chromium hands back. Look at both images before committing them: Jellyfin
+puts `api_key` in image URLs, and the check that none of it reached the pixels
+is a human one.
+
 ## CI: local-only, for now
 
 **Recommendation: keep this local-only. Do not add it to the PR gate.**
