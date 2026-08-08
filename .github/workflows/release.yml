@@ -270,6 +270,17 @@ jobs:
           # Full history: the update loop below re-fetches and hard-resets to
           # origin/main on each attempt, which a shallow clone makes fragile.
           fetch-depth: 0
+          # Clone over SSH as a deploy key rather than as GITHUB_TOKEN, because
+          # the push below has to get past the branch ruleset on main and
+          # GITHUB_TOKEN cannot: it authenticates as the github-actions bot,
+          # which is not a bypass actor and cannot be made one on a personal
+          # repository (the Integration actor type is org-only). A deploy key
+          # can be, and is - see `DeployKey` in the ruleset's bypass_actors.
+          #
+          # The key is write-scoped to this repository alone and carries no
+          # account permissions, which is the point: a PAT with enough rights
+          # to push here would also carry every other right the owner has.
+          ssh-key: ${{ secrets.MANIFEST_DEPLOY_KEY }}
 
       - name: Add the version to the repository manifest
         # Safety of this step:
@@ -278,15 +289,19 @@ jobs:
         #   origin/main and regenerates the entry from scratch, so there is
         #   never a merge or a rebase to conflict. Last writer wins on a file
         #   nobody else edits by hand.
-        # * Recursion. GITHUB_TOKEN pushes do not trigger workflows, and this
-        #   workflow only triggers on tags in any case. `[skip ci]` is belt and
-        #   braces for anyone re-running it with a PAT.
+        # * Recursion. This pushes as a deploy key, NOT as GITHUB_TOKEN, so the
+        #   usual "pushes from Actions do not trigger workflows" guarantee does
+        #   not apply and `[skip ci]` below is load-bearing rather than belt and
+        #   braces. It stops the manifest commit from starting a CI run over a
+        #   one-file JSON change. Release itself is safe either way: it triggers
+        #   on tags only, and this pushes a branch.
         # * Idempotence. Re-running the same tag rewrites that version's entry
         #   in place and exits cleanly if nothing changed.
         #
-        # If main is branch-protected against direct pushes, grant this workflow
-        # a bypass; there is no PR-based alternative that keeps the manifest in
-        # step with the release.
+        # main is ruleset-protected against direct pushes, which is why the
+        # checkout above authenticates as a deploy key: that key is a bypass
+        # actor. There is no PR-based alternative that keeps the manifest in
+        # step with the release rather than lagging behind a human merge.
         working-directory: main
         env:
           # Via env, not inline `${{ }}`: the changelog comes from a tag message
