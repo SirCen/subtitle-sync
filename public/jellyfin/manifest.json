@@ -6,6 +6,15 @@
     "description": "Subtitle Sync analyses the audio of a film or episode, compares it with the timings of a subtitle track, and writes a corrected copy of that track alongside the media. The analysis runs in your browser inside the Jellyfin dashboard; the server only decodes audio and saves the result.",
     "owner": "SirCen",
     "category": "Subtitles",
-    "versions": []
+    "versions": [
+      {
+        "version": "1.0.0.0",
+        "changelog": "First release of the Jellyfin plugin.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/SirCen/subtitle-sync/releases/download/1.0.0.0/subtitle-sync_1.0.0.0.zip",
+        "checksum": "39562dab4b63a3c905d3a00770db0321",
+        "timestamp": "2026-08-08T12:41:24Z"
+      }
+    ]
   }
 ]
