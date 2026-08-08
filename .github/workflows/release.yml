@@ -1,6 +1,6 @@
 name: Release plugin
 
-# Tagging `vX.Y.Z` publishes the Jellyfin plugin:
+# Tagging `MAJOR.MINOR.PATCH.REVISION` publishes the Jellyfin plugin:
 #
 #   tag -> build -> zip -> GitHub Release -> entry in public/jellyfin/manifest.json -> main
 #
@@ -10,7 +10,15 @@ name: Release plugin
 on:
   push:
     tags:
-      - "v*"
+      # Bare four-part versions only - no `v` prefix, no `-rc1` suffix. Jellyfin
+      # parses every version it sees with System.Version, so the tag, the
+      # assembly, the in-zip meta.json and the repository manifest are all
+      # spelled identically and nothing has to be translated between them.
+      #
+      # This is a glob, not a regex: `*` here means "any characters", so it
+      # matches 1.0.0.0 and rejects v1.0.0.0. The step below re-checks the shape
+      # properly, because the glob alone would also admit 1.0.0.0-rc1.
+      - "[0-9]*.[0-9]*.[0-9]*.[0-9]*"
 
 # Enough to create a release and to push the manifest commit back to main.
 permissions:
@@ -68,21 +76,17 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          raw="${tag#v}"
 
-          if [[ ! "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-            echo "::error::Tag '$tag' is not vMAJOR.MINOR.PATCH[.REVISION]."
+          # Exactly four numeric parts, nothing before and nothing after. The
+          # tag IS the plugin version - it is copied verbatim into meta.json and
+          # into the repository manifest, and a `v` prefix or an `-rc1` suffix
+          # would make System.Version.Parse throw on the server, which surfaces
+          # as the plugin simply never appearing in the catalogue.
+          if [[ ! "$tag" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$tag' is not MAJOR.MINOR.PATCH.REVISION. Jellyfin versions take exactly four numeric parts with no prefix or suffix."
             exit 1
           fi
-
-          # Jellyfin parses every version with System.Version. Normalise to four
-          # parts so the tag, the assembly, meta.json and the manifest are all
-          # spelled identically.
-          if [[ "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            version="$raw.0"
-          else
-            version="$raw"
-          fi
+          version="$tag"
 
           {
             echo "tag=$tag"
@@ -103,7 +107,9 @@ jobs:
             echo "::error::No <Version> element in $PLUGIN_CSPROJ."
             exit 1
           fi
-          # Normalise a 3-part <Version> the same way the tag is normalised.
+          # The tag must be four-part, but MSBuild is happy with a 3-part
+          # <Version> and expands it to X.Y.Z.0 in the assembly, so accept that
+          # spelling here rather than failing a release over a missing `.0`.
           if [[ "$declared" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             declared="$declared.0"
           fi
