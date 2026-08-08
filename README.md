@@ -42,6 +42,24 @@ golden parity test (see [Testing](#testing)).
   ratio list - each with a reset-to-default.
 - Order-independent drag-and-drop, 5 GB hard cap with a large-file warning.
 
+## Jellyfin plugin
+
+The same algorithm also ships as a **Jellyfin 10.11 plugin**, so you can re-time
+a track from inside your own server instead of downloading the video first. It
+analyses the audio of a film or episode in your browser and writes a corrected
+`<base>.<lang>.synced.srt` beside the media file; the original is left alone.
+
+- Source, build instructions and a local Docker test server:
+  [`jellyfin-plugin/`](jellyfin-plugin/README.md).
+- Install and usage docs: the site's `/plugin` page (behind
+  [`NEXT_PUBLIC_FEATURE_PLUGIN_PAGE`](#next_public_feature_plugin_page)).
+- Install by adding `https://subtitlesync.sircen.dev/jellyfin/manifest.json` as
+  a repository in Dashboard > Plugins, or drop a release zip in by hand.
+
+The plugin is a thin C# shell around the browser code: `lib/` stays the single
+source of truth and is bundled into the plugin, so the golden parity test covers
+what the plugin ships.
+
 ## Getting started
 
 ```bash
