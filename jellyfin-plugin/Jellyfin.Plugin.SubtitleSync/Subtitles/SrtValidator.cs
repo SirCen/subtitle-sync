@@ -53,6 +53,29 @@ public static class SrtValidator
     /// </remarks>
     public const int MaxCues = 50_000;
 
+    /// <summary>
+    /// The most digits an hour field may carry.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The field is variable width on purpose - a long recording legally runs
+    /// past 99 hours and some tools emit three digits - but "variable" was
+    /// previously "unbounded", and the parse behind it is a <c>long</c>. Nineteen
+    /// or more digits threw <see cref="OverflowException"/> straight out of
+    /// <see cref="Validate"/>, whose whole contract is that it returns a verdict
+    /// rather than throwing, and the save endpoint answered 500 instead of "line
+    /// 1 is not a subtitle timing line".
+    /// </para>
+    /// <para>
+    /// Nine digits also closes the quieter half of the same bug: at seventeen or
+    /// eighteen digits the parse succeeded and the unchecked millisecond
+    /// arithmetic below then wrapped, which silently defeated the reversed-cue
+    /// check. 999999999 hours is a hundred thousand years, so nothing this
+    /// rejects was ever a subtitle.
+    /// </para>
+    /// </remarks>
+    private const int MaxHourDigits = 9;
+
     private const char ByteOrderMark = '\uFEFF';
 
     private const string Arrow = "-->";
@@ -340,8 +363,9 @@ public static class SrtValidator
     /// Parses one <c>HH:MM:SS,mmm</c> timecode.
     /// </summary>
     /// <remarks>
-    /// The hour field takes two or more digits, because a long recording legally
-    /// runs past 99 hours and some tools emit three. Minutes, seconds and
+    /// The hour field takes two to <see cref="MaxHourDigits"/> digits, because a
+    /// long recording legally runs past 99 hours and some tools emit three, but
+    /// the value has to stay inside a <c>long</c>. Minutes, seconds and
     /// milliseconds are fixed width, which is what makes a truncated or
     /// over-long field a refusal rather than a silent misreading.
     /// </remarks>
@@ -364,11 +388,13 @@ public static class SrtValidator
         }
 
         var hourDigits = cursor - hourStart;
-        if (hourDigits < 2 || cursor >= span.Length || span[cursor] != ':')
+        if (hourDigits < 2 || hourDigits > MaxHourDigits || cursor >= span.Length || span[cursor] != ':')
         {
             return false;
         }
 
+        // Cannot fail: MaxHourDigits keeps the value inside long, and the loop
+        // above admitted nothing but ASCII digits.
         var hours = long.Parse(span[hourStart..cursor], CultureInfo.InvariantCulture);
         cursor++;
 

@@ -100,6 +100,12 @@ public class PcmController : ControllerBase
             new EventId(2, nameof(GetPcm)),
             "PCM extraction failed for item {ItemId}");
 
+    private static readonly Action<ILogger, Guid, Exception?> _logNotDeserializable =
+        LoggerMessage.Define<Guid>(
+            LogLevel.Warning,
+            new EventId(3, nameof(GetPcm)),
+            "Item {ItemId} exists in the library database but could not be deserialised; answering as not found");
+
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly FfmpegPcmStreamer _streamer;
@@ -171,10 +177,21 @@ public class PcmController : ControllerBase
         [FromQuery] int? audioStreamIndex,
         CancellationToken cancellationToken)
     {
-        var item = _libraryManager.GetItemById(itemId);
+        // Scoped to the caller, like every other endpoint. This one returns the
+        // decoded soundtrack rather than metadata, so the unscoped overload it
+        // used to call handed the audio of a library the caller has no access to
+        // to anyone holding EnableSubtitleManagement. See ItemLookup.
+        var item = ItemLookup.Find(
+            _libraryManager,
+            User,
+            itemId,
+            (id, ex) => _logNotDeserializable(_logger, id, ex));
         if (item is null)
         {
-            return NotFound(string.Format(CultureInfo.InvariantCulture, "No item with id {0}.", itemId));
+            return Problem(
+                detail: string.Create(CultureInfo.InvariantCulture, $"No item with id {itemId:N} is available to you."),
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Item not found");
         }
 
         var plan = PcmStreamPlanner.Plan(

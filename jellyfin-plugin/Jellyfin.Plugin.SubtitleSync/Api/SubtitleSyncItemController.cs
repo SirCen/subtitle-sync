@@ -45,15 +45,6 @@ namespace Jellyfin.Plugin.SubtitleSync.Api;
 public partial class SubtitleSyncItemController : ControllerBase
 {
     /// <summary>
-    /// The claim the server puts the authenticated user's id in.
-    /// <c>Jellyfin.Api.Constants.InternalClaimTypes.UserId</c> at v10.11.11.
-    /// Spelled out because <c>Jellyfin.Api</c> is not a package a plugin can
-    /// reference, so neither the constant nor <c>User.GetUserId()</c> is
-    /// reachable from here.
-    /// </summary>
-    private const string UserIdClaim = "Jellyfin-UserId";
-
-    /// <summary>
     /// The output format asked of <see cref="ISubtitleEncoder"/>.
     /// <c>MediaBrowser.Model.MediaInfo.SubtitleFormat.SRT</c>.
     /// </summary>
@@ -361,52 +352,14 @@ public partial class SubtitleSyncItemController : ControllerBase
     /// Resolves an item id against what the caller is allowed to see.
     /// </summary>
     /// <remarks>
-    /// The user-scoped overload is what the core controllers use, and it is the
-    /// difference between "you cannot see it" answering 404 and this endpoint
-    /// becoming a way to enumerate a parentally-restricted library. An API key
-    /// has no user, so it falls back to the unscoped lookup.
+    /// The rule itself lives in <see cref="ItemLookup"/> so that every endpoint
+    /// in the plugin gets the same one; see the remarks there for why a second
+    /// copy of it was a permission bypass.
     /// </remarks>
     /// <param name="itemId">The item id.</param>
     /// <returns>The item, or null.</returns>
     private BaseItem? FindItem(Guid itemId)
-    {
-        if (itemId.Equals(Guid.Empty))
-        {
-            return null;
-        }
-
-        var userId = CurrentUserId();
-
-        try
-        {
-            return userId.Equals(Guid.Empty)
-                ? _libraryManager.GetItemById<BaseItem>(itemId)
-                : _libraryManager.GetItemById<BaseItem>(itemId, userId);
-        }
-        catch (InvalidOperationException ex)
-        {
-            // Observed against 10.11.11: a row whose stored type the server can
-            // no longer resolve - left behind by an uninstalled plugin, or a
-            // internal row such as the all-zeros-but-one id - throws "Cannot
-            // deserialize unknown type" out of BaseItemRepository rather than
-            // returning null. Jellyfin's own /Items/{id} answers 500 for the
-            // same id. From the caller's point of view the item is not there,
-            // so say that instead of leaking a stack trace.
-            LogItemNotDeserializable(itemId, ex);
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Reads the authenticated user id out of the request claims.
-    /// </summary>
-    /// <returns>The user id, or <see cref="Guid.Empty"/> for an API key.</returns>
-    private Guid CurrentUserId()
-    {
-        var value = User?.FindFirst(UserIdClaim)?.Value;
-
-        return Guid.TryParse(value, out var userId) ? userId : Guid.Empty;
-    }
+        => ItemLookup.Find(_libraryManager, User, itemId, LogItemNotDeserializable);
 
     /// <summary>
     /// The 404 for an item that does not exist or is not visible. Deliberately

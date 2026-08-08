@@ -56,14 +56,6 @@ namespace Jellyfin.Plugin.SubtitleSync.Api;
 public partial class SubtitleSyncSaveController : ControllerBase
 {
     /// <summary>
-    /// The claim the server puts the authenticated user's id in.
-    /// <c>Jellyfin.Api.Constants.InternalClaimTypes.UserId</c> at v10.11.11.
-    /// Spelled out because <c>Jellyfin.Api</c> is not a package a plugin can
-    /// reference.
-    /// </summary>
-    private const string UserIdClaim = "Jellyfin-UserId";
-
-    /// <summary>
     /// SRT has no registered media type, and the page posts
     /// <c>text/plain;charset=utf-8</c>.
     /// </summary>
@@ -381,30 +373,7 @@ public partial class SubtitleSyncSaveController : ControllerBase
     /// <param name="itemId">The item id.</param>
     /// <returns>The item, or null.</returns>
     private BaseItem? FindItem(Guid itemId)
-    {
-        if (itemId.Equals(Guid.Empty))
-        {
-            return null;
-        }
-
-        var value = User?.FindFirst(UserIdClaim)?.Value;
-        var userId = Guid.TryParse(value, out var parsed) ? parsed : Guid.Empty;
-
-        try
-        {
-            return userId.Equals(Guid.Empty)
-                ? _libraryManager.GetItemById<BaseItem>(itemId)
-                : _libraryManager.GetItemById<BaseItem>(itemId, userId);
-        }
-        catch (InvalidOperationException ex)
-        {
-            // Same behaviour as the read endpoints: a row the server can no
-            // longer deserialise throws rather than returning null, and from the
-            // caller's point of view the item is simply not there.
-            LogItemNotDeserializable(itemId, ex);
-            return null;
-        }
-    }
+        => ItemLookup.Find(_libraryManager, User, itemId, LogItemNotDeserializable);
 
     /// <summary>
     /// Logs a completed save. Information level: this is the audit trail for the

@@ -92,6 +92,52 @@ public class SrtValidatorTests
     }
 
     /// <summary>
+    /// The hour field is variable width, but the value behind it is a
+    /// <c>long</c>. It used to be unbounded, so a nineteen-plus-digit hour threw
+    /// <c>OverflowException</c> out of a method whose contract is that it returns
+    /// a verdict, and <c>POST /Save</c> answered 500 with a stack trace instead
+    /// of naming the offending line.
+    /// </summary>
+    [Theory]
+    [InlineData("9999999999")]
+    [InlineData("99999999999999999")]
+    [InlineData("99999999999999999999999")]
+    public void RefusesAnHourFieldTooLongToBeANumberRatherThanThrowing(string hours)
+    {
+        var result = SrtValidator.Validate($"{hours}:00:00,000 --> 00:00:01,000\nHi\n");
+
+        Assert.False(result.IsValid);
+        Assert.Equal(SrtValidationError.MissingTiming, result.Error);
+    }
+
+    /// <summary>
+    /// The quieter half of the same bug: at seventeen or eighteen digits the
+    /// parse succeeded and the millisecond arithmetic wrapped, so a start past
+    /// the end went unnoticed. Whatever the cap is, no accepted hour field may
+    /// produce a negative or wrapped position.
+    /// </summary>
+    [Fact]
+    public void EveryAcceptedHourFieldStillOrdersItsCuesCorrectly()
+    {
+        for (var digits = 2; digits <= 24; digits++)
+        {
+            var hours = new string('9', digits);
+
+            // Start at the largest hour the field can express, end one second
+            // into hour zero. Only a wrapped start can make this look ordered.
+            var reversed = SrtValidator.Validate($"{hours}:00:00,000 --> 00:00:01,000\nHi\n");
+
+            Assert.False(
+                reversed.IsValid,
+                $"a {digits}-digit hour was accepted as a cue that ends before it starts");
+
+            Assert.True(
+                reversed.Error is SrtValidationError.ReversedCue or SrtValidationError.MissingTiming,
+                $"a {digits}-digit hour was refused as {reversed.Error}");
+        }
+    }
+
+    /// <summary>
     /// VobSub-derived files carry coordinates after the timing. They are not ours
     /// to reject, and they are preserved verbatim.
     /// </summary>

@@ -33,6 +33,23 @@ namespace Jellyfin.Plugin.SubtitleSync.Api;
 /// the Dashboard rather than to the sync page.
 /// </para>
 /// <para>
+/// <b>The cache is trusted-writer, not verified, and that is a deliberate
+/// trade.</b> <see cref="SpeechSignalCodec.Validate"/> proves an envelope is
+/// well-formed - magic, length, zeroed padding, CRC - and nothing more. A
+/// syntactically perfect signal of arbitrary bits passes, so any account with
+/// <see cref="Policies.SubtitleManagement"/> can read the key for an item it can
+/// see from <c>GET /SubtitleSync/SignalKey/{itemId}</c> and then replace what is
+/// stored under it. The next administrator to sync that item gets a cache hit,
+/// analyses against the planted signal, and is shown a confident offset that has
+/// nothing to do with the audio - which, as
+/// <see cref="SpeechSignalCodec"/> says of bad signals generally, is a worse
+/// failure than an error. Accepted because the alternative is a cache only its
+/// own writer can read, which is not a cache; because the write into the library
+/// still needs elevation; and because the damage is one mis-timed sibling file
+/// that is obvious on playback. Do not read the CRC as an integrity guarantee
+/// against the people filling this cache: it is not one.
+/// </para>
+/// <para>
 /// Controllers are auto-discovered - the server adds every plugin assembly as
 /// an MVC application part - but they are resolved from the DI container, so
 /// <see cref="ISignalCacheStore"/> has to be registered. That happens in

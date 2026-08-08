@@ -31,6 +31,20 @@ namespace Jellyfin.Plugin.SubtitleSync.SignalCache;
 /// join is exactly the kind of normalisation that turns a validated string back
 /// into an unvalidated one.
 /// </para>
+/// <para>
+/// <b>What this does not establish is who wrote the entry.</b> Everything above
+/// is about where a key may point; nothing here, and nothing in
+/// <see cref="SpeechSignalCodec.Validate"/>, says anything about whether the
+/// bytes under it describe the audio. The CRC proves the envelope survived the
+/// wire, not that it came from an honest analysis: any caller with
+/// <c>SubtitleManagement</c> can ask <c>GET /SubtitleSync/SignalKey/{itemId}</c>
+/// for the exact key of an item they can see and then POST a well-formed
+/// envelope of arbitrary bits under it, and the next administrator to sync that
+/// item analyses against it. The cache is trusted-writer by design - it exists
+/// so that one user's analysis serves everyone else's - and it should not later
+/// be read as verified. See the remarks on
+/// <c>SubtitleSyncSignalController</c> for the threat model in full.
+/// </para>
 /// </remarks>
 public static class SignalCacheKey
 {
