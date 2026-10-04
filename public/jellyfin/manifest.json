@@ -8,6 +8,22 @@
     "category": "Subtitles",
     "versions": [
       {
+        "version": "1.0.0.2",
+        "changelog": "Add a Jellyfin 12 build",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/SirCen/subtitle-sync/releases/download/1.0.0.2/subtitle-sync_1.0.0.2_jellyfin-12.zip",
+        "checksum": "2c0bef3874d12b06bace307506661df4",
+        "timestamp": "2026-10-04T05:54:03Z"
+      },
+      {
+        "version": "1.0.0.2",
+        "changelog": "Add a Jellyfin 12 build",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "https://github.com/SirCen/subtitle-sync/releases/download/1.0.0.2/subtitle-sync_1.0.0.2_jellyfin-10.11.zip",
+        "checksum": "62f3be212e8792656bcba34c1299fafb",
+        "timestamp": "2026-10-04T05:54:03Z"
+      },
+      {
         "version": "1.0.0.1",
         "changelog": "Release the manifest update from CI.",
         "targetAbi": "10.11.0.0",
