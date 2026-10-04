@@ -1,6 +1,7 @@
 # Jellyfin plugin
 
-The Jellyfin 10.11 side of Subtitle Sync. Everything here is separate from the
+The Jellyfin side of Subtitle Sync, for Jellyfin 10.11 and Jellyfin 12.
+Everything here is separate from the
 Next.js site at the repo root and builds with the .NET SDK, not npm.
 
 The design is a **thin C# shell hosting a browser page**. The sync algorithm
@@ -12,10 +13,10 @@ actually ships. See epic #18.
 
 | Path | What it is |
 | --- | --- |
-| `Jellyfin.Plugin.SubtitleSync/` | The plugin assembly. Targets `net9.0`. |
+| `Jellyfin.Plugin.SubtitleSync/` | The plugin assembly. Targets `net9.0` (Jellyfin 10.11) and `net10.0` (Jellyfin 12). |
 | `Jellyfin.Plugin.SubtitleSync.Tests/` | xUnit tests for it. |
 | `Jellyfin.Plugin.SubtitleSync.sln` | Solution over both. |
-| `docker/` | Local Jellyfin 10.11 server to test against. See `docker/README.md`. |
+| `docker/` | Local Jellyfin server (10.11 or 12) to test against. See `docker/README.md`. |
 | `e2e/` | Playwright smoke tests that drive that server. |
 | `web/` | Browser-side sources for the plugin page (#10, #12) and the injected menu item (#13). |
 
@@ -105,25 +106,39 @@ a webpack module id plus a content hash, minified, and not marked `no-cache`.
 
 ## Building
 
-Needs the .NET SDK. A .NET 10 SDK is fine - it restores the `net9.0` targeting
-pack on demand - but the **plugin must stay on `net9.0`**, because that is what
-Jellyfin 10.11 runs on (`Jellyfin.Server.csproj` at `v10.11.11`).
+Needs the **.NET 10 SDK**. The plugin is built twice from the same source, one
+build per Jellyfin server line, set up in `Directory.Build.props`:
+
+| Target framework | Compiled against | Ships as | For |
+| --- | --- | --- | --- |
+| `net9.0` | `Jellyfin.Controller` 10.11.11 | `targetAbi 10.11.0.0` | Jellyfin 10.11 (runs on .NET 9) |
+| `net10.0` | `Jellyfin.Controller` 12.0.0 | `targetAbi 12.0.0.0` | Jellyfin 12 (runs on .NET 10) |
+
+Each build is compiled against the **oldest** server its `targetAbi` admits, so
+it can never bind to a member a supported server lacks. Do not move either
+framework: Jellyfin loads plugins into its own runtime, and a 10.11 server has
+no .NET 10.
+
+The source has no per-version code. The 10.11 build was also verified to load
+and JIT cleanly against the Jellyfin 12.1 assemblies, so a 12 server running an
+older release of this plugin is fine too. The separate 12 build exists so that
+Jellyfin 12 gets a build made for its own runtime and server packages.
 
 ```bash
 cd jellyfin-plugin
 dotnet build -c Release
-dotnet test
+dotnet test            # runs the whole suite twice, once per target framework
 ```
 
-`dotnet test` runs the test assembly on whatever shared runtime is installed:
+`dotnet test` runs each test assembly on whatever shared runtime is installed:
 the test project sets `<RollForward>Major</RollForward>` so a machine with only
 the .NET 10 runtime does not need a .NET 9 one installed as well.
 
-To produce something loadable:
+To produce something loadable, pick the framework for your server:
 
 ```bash
 dotnet publish Jellyfin.Plugin.SubtitleSync/Jellyfin.Plugin.SubtitleSync.csproj \
-  -c Release -o out
+  -c Release -f net9.0 -o out     # Jellyfin 10.11; -f net10.0 for Jellyfin 12
 ```
 
 `out/` contains `Jellyfin.Plugin.SubtitleSync.dll` and `Newtonsoft.Json.dll` and
@@ -135,13 +150,14 @@ time.
 ## Testing against a real server
 
 `docker/` is a throwaway Jellyfin 10.11.11 with a seeded one-movie library
-(issue #19). Full details in `docker/README.md`. The loop:
+(issue #19); `JELLYFIN_VERSION=12.1` runs it on Jellyfin 12 instead. Full
+details in `docker/README.md`. The loop:
 
 ```bash
 npm run jf:up                      # from the repo root, if it is not already up
 
 cd jellyfin-plugin
-dotnet publish Jellyfin.Plugin.SubtitleSync/Jellyfin.Plugin.SubtitleSync.csproj -c Release -o out
+dotnet publish Jellyfin.Plugin.SubtitleSync/Jellyfin.Plugin.SubtitleSync.csproj -c Release -f net9.0 -o out
 cp out/*.dll docker/plugins/SubtitleSync/
 docker compose -f docker/docker-compose.yml restart jellyfin
 

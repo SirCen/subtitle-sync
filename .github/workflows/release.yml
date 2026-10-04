@@ -2,7 +2,12 @@ name: Release plugin
 
 # Tagging `MAJOR.MINOR.PATCH.REVISION` publishes the Jellyfin plugin:
 #
-#   tag -> build -> zip -> GitHub Release -> entry in public/jellyfin/manifest.json -> main
+#   tag -> build x2 -> zip x2 -> GitHub Release -> entries in public/jellyfin/manifest.json -> main
+#
+# Every tag ships TWO builds of the same source, one per Jellyfin server line:
+# net9.0 against the 10.11 packages and net10.0 against the 12 ones (see
+# jellyfin-plugin/Directory.Build.props). Each gets its own zip and its own
+# manifest entry, distinguished only by targetAbi.
 #
 # The manifest is the file users point Jellyfin at. It is served from
 # https://subtitlesync.sircen.dev/jellyfin/manifest.json and, as a fallback, from
@@ -36,10 +41,20 @@ env:
   PLUGIN_ASSEMBLY: Jellyfin.Plugin.SubtitleSync.dll
   PLUGIN_GUID: 96d55013-3cf0-465e-9036-7fb73dd47f71
   PLUGIN_NAME: Subtitle Sync
-  # Minimum server version, not an exact match: InstallationManager filters with
-  # `Version.Parse(x.TargetAbi) <= appVer` and applies no upper bound. One entry
-  # covers every 10.11 patch and every later major. Research doc, section 13.
-  TARGET_ABI: 10.11.0.0
+  # One line per build: target framework, targetAbi, zip suffix. Keep the
+  # framework/ABI pairs in step with jellyfin-plugin/Directory.Build.props, which
+  # compiles each framework against the OLDEST server its targetAbi admits.
+  #
+  # targetAbi is a minimum, not an exact match: InstallationManager filters with
+  # `Version.Parse(x.TargetAbi) <= appVer` and applies no upper bound (research
+  # doc, section 13; unchanged at v12.1). So a 10.11 server is offered only the
+  # 10.11 build, and a 12 server is offered both. Among entries with the same
+  # plugin version it then takes the FIRST one in the manifest - the sort is a
+  # stable OrderByDescending on the version alone - which is why the newest ABI
+  # is listed, and therefore written, first.
+  BUILDS: |
+    net10.0 12.0.0.0 jellyfin-12
+    net9.0 10.11.0.0 jellyfin-10.11
   MANIFEST_PATH: public/jellyfin/manifest.json
 
 jobs:
@@ -54,9 +69,12 @@ jobs:
       - name: Set up .NET
         uses: actions/setup-dotnet@v5
         with:
-          # The plugin targets net9.0 because that is what Jellyfin 10.11 runs
-          # on. The solution is a classic .sln so a 9.0.1xx SDK can open it.
-          dotnet-version: "9.0.x"
+          # The 10 SDK is what matters: it compiles both the net9.0 (Jellyfin
+          # 10.11) and the net10.0 (Jellyfin 12) build. 9.0.x is kept so this
+          # job has the same toolchain as the CI job that tested the commit.
+          dotnet-version: |
+            9.0.x
+            10.0.x
 
       - name: Set up Node
         # Not optional: `dotnet publish` below invokes node to build the esbuild
@@ -91,7 +109,6 @@ jobs:
           {
             echo "tag=$tag"
             echo "version=$version"
-            echo "zip_name=subtitle-sync_$version.zip"
           } >> "$GITHUB_OUTPUT"
           echo "Releasing $version from tag $tag"
 
@@ -124,11 +141,16 @@ jobs:
         # over lib/ and embeds the result (#10), so this needs Node and a
         # populated node_modules - both set up above. Never pass
         # -p:SkipWebBundle=true here: it would ship a stale or missing bundle.
-        run: >
-          dotnet publish "$PLUGIN_CSPROJ"
-          -c Release
-          -o publish
-          --nologo
+        #
+        # One publish per framework, into publish/<tfm>/. `dotnet publish` on a
+        # multi-targeted project refuses to run without -f.
+        run: |
+          set -euo pipefail
+          while read -r tfm abi label; do
+            [[ -z "$tfm" ]] && continue
+            echo "--- $tfm (Jellyfin $abi)"
+            dotnet publish "$PLUGIN_CSPROJ" -c Release -f "$tfm" -o "publish/$tfm" --nologo
+          done <<< "$BUILDS"
 
       - name: Check the built assembly version matches the tag
         # Second, independent check: on the artefact rather than on the source.
@@ -137,15 +159,17 @@ jobs:
         shell: pwsh
         run: |
           $expected = '${{ steps.version.outputs.version }}'
-          $dll = Join-Path 'publish' $env:PLUGIN_ASSEMBLY
-          $actual = [System.Reflection.AssemblyName]::GetAssemblyName($dll).Version.ToString()
-          if ($actual -ne $expected) {
-            Write-Output "::error::$env:PLUGIN_ASSEMBLY has AssemblyVersion $actual, tag says $expected."
-            exit 1
+          foreach ($dir in Get-ChildItem 'publish' -Directory) {
+            $dll = Join-Path $dir.FullName $env:PLUGIN_ASSEMBLY
+            $actual = [System.Reflection.AssemblyName]::GetAssemblyName($dll).Version.ToString()
+            if ($actual -ne $expected) {
+              Write-Output "::error::$($dir.Name)/$env:PLUGIN_ASSEMBLY has AssemblyVersion $actual, tag says $expected."
+              exit 1
+            }
+            Write-Output "$($dir.Name)/$env:PLUGIN_ASSEMBLY carries AssemblyVersion $actual"
           }
-          Write-Output "$env:PLUGIN_ASSEMBLY carries AssemblyVersion $actual"
 
-      - name: Assemble the install zip
+      - name: Assemble the install zips
         id: package
         # Jellyfin extracts the zip straight into
         # `plugins/<name>_<version>/` with ZipFile.ExtractToDirectory, so the
@@ -154,18 +178,15 @@ jobs:
         # Assemblies only: the .pdb and the XML doc file are build by-products,
         # and the server's own assemblies are already excluded by
         # ExcludeAssets=runtime in the csproj.
+        #
+        # One zip per line of BUILDS. Each is recorded in builds.tsv as
+        # `targetAbi <TAB> zip <TAB> md5`, in BUILDS order, for the upload, the
+        # verification and the manifest steps below.
         run: |
           set -euo pipefail
           version='${{ steps.version.outputs.version }}'
-          zip_name='${{ steps.version.outputs.zip_name }}'
-
-          if [[ ! -f "publish/$PLUGIN_ASSEMBLY" ]]; then
-            echo "::error::publish/$PLUGIN_ASSEMBLY is missing."
-            exit 1
-          fi
-
-          rm -rf stage && mkdir stage
-          cp publish/*.dll stage/
+          builds_file="$RUNNER_TEMP/builds.tsv"
+          : > "$builds_file"
 
           # Changelog: the annotated tag's message if there is one, otherwise a
           # bare line. Shown in Dashboard > Plugins next to the version.
@@ -190,77 +211,95 @@ jobs:
 
           timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          # In-zip meta.json: MediaBrowser.Common.Plugins.PluginManifest. A
-          # different schema from the repository manifest. The server rewrites it
-          # on install, but it is what a manual zip drop reads.
-          assemblies=$(cd stage && ls *.dll | jq -R . | jq -sc .)
-          jq -n \
-            --arg category "Subtitles" \
-            --arg changelog "$changelog" \
-            --arg description "Re-time subtitle tracks against the audio they belong to." \
-            --arg guid "$PLUGIN_GUID" \
-            --arg name "$PLUGIN_NAME" \
-            --arg overview "Re-time subtitle tracks against the audio they belong to." \
-            --arg owner "SirCen" \
-            --arg targetAbi "$TARGET_ABI" \
-            --arg timestamp "$timestamp" \
-            --arg version "$version" \
-            --argjson assemblies "$assemblies" \
-            '{category: $category, changelog: $changelog, description: $description,
-              guid: $guid, name: $name, overview: $overview, owner: $owner,
-              targetAbi: $targetAbi, timestamp: $timestamp, version: $version,
-              status: "Active", autoUpdate: true, assemblies: $assemblies}' \
-            > stage/meta.json
+          while read -r tfm target_abi label; do
+            [[ -z "$tfm" ]] && continue
+            zip_name="subtitle-sync_${version}_${label}.zip"
 
-          (cd stage && zip -qr "../$zip_name" .)
+            if [[ ! -f "publish/$tfm/$PLUGIN_ASSEMBLY" ]]; then
+              echo "::error::publish/$tfm/$PLUGIN_ASSEMBLY is missing."
+              exit 1
+            fi
 
-          checksum=$(md5sum "$zip_name" | cut -d' ' -f1)
+            rm -rf stage && mkdir stage
+            cp "publish/$tfm/"*.dll stage/
+
+            # In-zip meta.json: MediaBrowser.Common.Plugins.PluginManifest. A
+            # different schema from the repository manifest. The server rewrites
+            # it on install, but it is what a manual zip drop reads.
+            assemblies=$(cd stage && ls *.dll | jq -R . | jq -sc .)
+            jq -n \
+              --arg category "Subtitles" \
+              --arg changelog "$changelog" \
+              --arg description "Re-time subtitle tracks against the audio they belong to." \
+              --arg guid "$PLUGIN_GUID" \
+              --arg name "$PLUGIN_NAME" \
+              --arg overview "Re-time subtitle tracks against the audio they belong to." \
+              --arg owner "SirCen" \
+              --arg targetAbi "$target_abi" \
+              --arg timestamp "$timestamp" \
+              --arg version "$version" \
+              --argjson assemblies "$assemblies" \
+              '{category: $category, changelog: $changelog, description: $description,
+                guid: $guid, name: $name, overview: $overview, owner: $owner,
+                targetAbi: $targetAbi, timestamp: $timestamp, version: $version,
+                status: "Active", autoUpdate: true, assemblies: $assemblies}' \
+              > stage/meta.json
+
+            rm -f "$zip_name"
+            (cd stage && zip -qr "../$zip_name" .)
+
+            checksum=$(md5sum "$zip_name" | cut -d' ' -f1)
+            printf '%s\t%s\t%s\n' "$target_abi" "$zip_name" "$checksum" >> "$builds_file"
+
+            echo "$zip_name (targetAbi $target_abi)  md5 $checksum"
+            unzip -l "$zip_name"
+          done <<< "$BUILDS"
+
           {
-            echo "checksum=$checksum"
             echo "timestamp=$timestamp"
             echo "changelog=$changelog"
           } >> "$GITHUB_OUTPUT"
-
-          echo "$zip_name  md5 $checksum"
-          unzip -l "$zip_name"
 
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          zip_name='${{ steps.version.outputs.zip_name }}'
           tag='${{ steps.version.outputs.tag }}'
+          mapfile -t zips < <(cut -f2 "$RUNNER_TEMP/builds.tsv")
 
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "$zip_name" --clobber
+            gh release upload "$tag" "${zips[@]}" --clobber
           else
-            gh release create "$tag" "$zip_name" \
+            gh release create "$tag" "${zips[@]}" \
               --title "$tag" \
               --generate-notes
           fi
 
-      - name: Verify the published asset
-        # The manifest is about to promise these bytes at this URL. Fetch it back
-        # over the public URL and re-check the MD5 before making that promise.
-        env:
-          EXPECTED_CHECKSUM: ${{ steps.package.outputs.checksum }}
+      - name: Verify the published assets
+        # The manifest is about to promise these bytes at these URLs. Fetch each
+        # back over the public URL and re-check the MD5 before making that
+        # promise.
         run: |
           set -euo pipefail
-          url="https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.version.outputs.zip_name }}"
-          for attempt in 1 2 3 4 5; do
-            if curl -fsSL --retry 3 -o downloaded.zip "$url"; then
-              break
+          base="https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}"
+          while IFS=$'\t' read -r target_abi zip_name expected; do
+            url="$base/$zip_name"
+            rm -f downloaded.zip
+            for attempt in 1 2 3 4 5; do
+              if curl -fsSL --retry 3 -o downloaded.zip "$url"; then
+                break
+              fi
+              echo "Asset not servable yet (attempt $attempt), waiting."
+              sleep 5
+            done
+            actual=$(md5sum downloaded.zip | cut -d' ' -f1)
+            if [[ "$actual" != "$expected" ]]; then
+              echo "::error::$url serves md5 $actual, expected $expected."
+              exit 1
             fi
-            echo "Asset not servable yet (attempt $attempt), waiting."
-            sleep 5
-          done
-          actual=$(md5sum downloaded.zip | cut -d' ' -f1)
-          if [[ "$actual" != "$EXPECTED_CHECKSUM" ]]; then
-            echo "::error::$url serves md5 $actual, expected $EXPECTED_CHECKSUM."
-            exit 1
-          fi
-          echo "$url verified"
+            echo "$url verified (targetAbi $target_abi)"
+          done < "$RUNNER_TEMP/builds.tsv"
 
       - name: Check out main for the manifest commit
         uses: actions/checkout@v5
@@ -295,7 +334,7 @@ jobs:
         #   braces. It stops the manifest commit from starting a CI run over a
         #   one-file JSON change. Release itself is safe either way: it triggers
         #   on tags only, and this pushes a branch.
-        # * Idempotence. Re-running the same tag rewrites that version's entry
+        # * Idempotence. Re-running the same tag rewrites that version's entries
         #   in place and exits cleanly if nothing changed.
         #
         # main is ruleset-protected against direct pushes, which is why the
@@ -307,20 +346,18 @@ jobs:
           # Via env, not inline `${{ }}`: the changelog comes from a tag message
           # and must never be spliced into the shell.
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
-          ZIP_NAME: ${{ steps.version.outputs.zip_name }}
           CHANGELOG: ${{ steps.package.outputs.changelog }}
-          CHECKSUM: ${{ steps.package.outputs.checksum }}
           TIMESTAMP: ${{ steps.package.outputs.timestamp }}
-          REPOSITORY: ${{ github.repository }}
+          SOURCE_BASE: https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
 
           cat > "$RUNNER_TEMP/update-manifest.mjs" <<'EOF'
           import { readFileSync, writeFileSync } from "node:fs";
 
-          const [path, version, changelog, targetAbi, sourceUrl, checksum, timestamp] =
-            process.argv.slice(2);
+          const [path, buildsFile] = process.argv.slice(2);
+          const { VERSION: version, CHANGELOG: changelog, TIMESTAMP: timestamp, SOURCE_BASE: sourceBase } =
+            process.env;
 
           const manifest = JSON.parse(readFileSync(path, "utf8"));
           const guid = process.env.PLUGIN_GUID.toLowerCase();
@@ -329,14 +366,25 @@ jobs:
             throw new Error(`No package with guid ${guid} in ${path}`);
           }
 
-          const entry = { version, changelog, targetAbi, sourceUrl, checksum, timestamp };
+          // One entry per build, in BUILDS order - newest ABI first, because a
+          // server that admits several entries of one version installs the
+          // first. See the BUILDS comment at the top of this workflow.
+          const entries = readFileSync(buildsFile, "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => {
+              const [targetAbi, zip, checksum] = line.split("\t");
+              return { version, changelog, targetAbi, sourceUrl: `${sourceBase}/${zip}`, checksum, timestamp };
+            });
+          if (entries.length === 0) {
+            throw new Error(`No builds listed in ${buildsFile}`);
+          }
+
           // Newest first, and re-running a tag replaces rather than duplicates.
-          pkg.versions = [entry, ...pkg.versions.filter((v) => v.version !== version)];
+          pkg.versions = [...entries, ...pkg.versions.filter((v) => v.version !== version)];
 
           writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
           EOF
-
-          source_url="https://github.com/$REPOSITORY/releases/download/$TAG/$ZIP_NAME"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -345,14 +393,7 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            node "$RUNNER_TEMP/update-manifest.mjs" \
-              "$MANIFEST_PATH" \
-              "$VERSION" \
-              "$CHANGELOG" \
-              "$TARGET_ABI" \
-              "$source_url" \
-              "$CHECKSUM" \
-              "$TIMESTAMP"
+            node "$RUNNER_TEMP/update-manifest.mjs" "$MANIFEST_PATH" "$RUNNER_TEMP/builds.tsv"
 
             if git diff --quiet -- "$MANIFEST_PATH"; then
               echo "$MANIFEST_PATH already lists $VERSION; nothing to push."

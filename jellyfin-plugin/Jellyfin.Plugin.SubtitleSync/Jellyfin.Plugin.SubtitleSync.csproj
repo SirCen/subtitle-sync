@@ -1,8 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Jellyfin 10.11 runs on net9.0 (Jellyfin.Server/Jellyfin.Server.csproj at v10.11.11). -->
-    <TargetFramework>net9.0</TargetFramework>
+    <!--
+      TargetFrameworks (net9.0 for Jellyfin 10.11, net10.0 for Jellyfin 12) and
+      the matching Jellyfin package versions come from ../Directory.Build.props.
+    -->
     <RootNamespace>Jellyfin.Plugin.SubtitleSync</RootNamespace>
     <AssemblyName>Jellyfin.Plugin.SubtitleSync</AssemblyName>
     <Nullable>enable</Nullable>
@@ -20,10 +22,20 @@
     -->
     <NoWarn>$(NoWarn);CA1724</NoWarn>
 
+    <!--
+      CA1873: "evaluation of this argument may be expensive if logging is
+      disabled". New in the .NET 10 analyzers, so it only fires on the net10.0
+      (Jellyfin 12) build. Every hit is an argument to a [LoggerMessage]
+      method - a short Sum, a 4-byte header read, one stat() - and the rule
+      does not recognise an IsEnabled guard around a generated method, so the
+      only way to satisfy it would be to drop the numbers from the log.
+    -->
+    <NoWarn>$(NoWarn);CA1873</NoWarn>
+
     <!-- Kept in step with the repository manifest version (issue #15). -->
-    <Version>1.0.0.1</Version>
-    <AssemblyVersion>1.0.0.1</AssemblyVersion>
-    <FileVersion>1.0.0.1</FileVersion>
+    <Version>1.0.0.2</Version>
+    <AssemblyVersion>1.0.0.2</AssemblyVersion>
+    <FileVersion>1.0.0.2</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -32,10 +44,10 @@
       output. The server already has them loaded; shipping copies is how you get
       type-identity failures at load time.
     -->
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.11">
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinPackageVersion)">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
-    <PackageReference Include="Jellyfin.Model" Version="10.11.11">
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinPackageVersion)">
       <ExcludeAssets>runtime</ExcludeAssets>
     </PackageReference>
 
@@ -89,9 +101,20 @@
     -->
     <RepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../..'))</RepoRoot>
     <WebProjectDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../web'))</WebProjectDir>
-    <WebBundlePath>$(WebProjectDir)/dist/subtitleSync.js</WebBundlePath>
-    <WebPageBundlePath>$(WebProjectDir)/dist/subtitleSyncPage.js</WebPageBundlePath>
-    <WebInjectBundlePath>$(WebProjectDir)/dist/subtitleSyncInject.js</WebInjectBundlePath>
+
+    <!--
+      Each target framework bundles into its own directory under obj/. The net9.0
+      and net10.0 inner builds can run in parallel (and the test project builds
+      them again through its own per-framework references), so a shared web/dist
+      would have one esbuild run rewriting the files while the other build is
+      embedding them. With SkipWebBundle there is no esbuild run to race, and the
+      prebuilt web/dist from `npm run plugin:bundle` is used as before.
+    -->
+    <WebDistDir Condition="'$(SkipWebBundle)' == 'true'">$(WebProjectDir)/dist</WebDistDir>
+    <WebDistDir Condition="'$(SkipWebBundle)' != 'true'">$(MSBuildProjectDirectory)/obj/webbundle/$(Configuration)/$(TargetFramework)</WebDistDir>
+    <WebBundlePath>$(WebDistDir)/subtitleSync.js</WebBundlePath>
+    <WebPageBundlePath>$(WebDistDir)/subtitleSyncPage.js</WebPageBundlePath>
+    <WebInjectBundlePath>$(WebDistDir)/subtitleSyncInject.js</WebInjectBundlePath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -150,7 +173,7 @@
     <Error Condition="!Exists('$(RepoRoot)/node_modules/esbuild/package.json')"
            Text="node_modules is missing or incomplete (no esbuild) under $(RepoRoot). Run `npm install` in the repository root before building this plugin." />
 
-    <Exec Command="node &quot;$(WebProjectDir)/build.mjs&quot;" WorkingDirectory="$(RepoRoot)" />
+    <Exec Command="node &quot;$(WebProjectDir)/build.mjs&quot; &quot;--outdir=$(WebDistDir)&quot;" WorkingDirectory="$(RepoRoot)" />
   </Target>
 
   <!--

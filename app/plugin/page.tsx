@@ -1,6 +1,6 @@
 // Feature-flagged Jellyfin plugin page.
 //
-// Install and usage documentation for the Jellyfin 10.11 plugin that lives in
+// Install and usage documentation for the Jellyfin plugin (10.11 and 12) that lives in
 // `jellyfin-plugin/`. When `NEXT_PUBLIC_FEATURE_PLUGIN_PAGE` is not "1" this
 // route 404s. Because the flag is inlined at build time, the `notFound()` branch
 // is all that survives in a flag-off build - but the route still exists in the
@@ -93,7 +93,7 @@ function Hero() {
   return (
     <header>
       <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-400">
-        Jellyfin 10.11 plugin
+        Jellyfin 10.11 &amp; 12 plugin
       </p>
       <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
         Fix a drifting subtitle without leaving Jellyfin
@@ -171,11 +171,12 @@ function Requirements() {
   return (
     <Section title="Requirements">
       <Rows>
-        <Row label="Jellyfin 10.11 or newer">
-          The plugin targets the 10.11 plugin API and runs on <Code>net9.0</Code>
-          , which is what 10.11 ships. There is no upper bound: the manifest
-          declares 10.11 as a minimum, so newer servers are offered the plugin
-          too. It will not load on 10.10 or earlier.
+        <Row label="Jellyfin 10.11 or 12">
+          Every release ships two builds of the same code: one on{" "}
+          <Code>net9.0</Code> for Jellyfin 10.11, and one on{" "}
+          <Code>net10.0</Code> for Jellyfin 12. The repository picks the right
+          one for your server automatically. It will not load on 10.10 or
+          earlier.
         </Row>
         <Row label="An administrator account">
           In principle the API splits permissions: analysing a track needs the{" "}

@@ -1,16 +1,19 @@
-# Local Jellyfin 10.11 server for plugin smoke tests.
+# Local Jellyfin server for plugin smoke tests. 10.11.11 by default; set
+# JELLYFIN_VERSION=12.1 to run the same harness against Jellyfin 12.
 #
 # Run this from `jellyfin-plugin/docker/` (or via `npm run jf:up` from the repo
 # root, which seeds the library and completes the startup wizard for you).
 #
 #   docker compose up -d
 #
-# Tag is pinned deliberately. `latest` on jellyfin/jellyfin currently points at
-# the 12.0 pre-release line, which is NOT what this plugin targets.
+# Tag is pinned deliberately, never `latest`: the plugin ships one build per
+# server line (net9.0 for 10.11, net10.0 for 12), and the build staged in
+# ./plugins/SubtitleSync has to match the line this runs. `npm run jf:up` passes
+# JELLYFIN_VERSION through from harness.config.json or the environment.
 
 services:
   jellyfin:
-    image: jellyfin/jellyfin:10.11.11
+    image: jellyfin/jellyfin:${JELLYFIN_VERSION:-10.11.11}
     container_name: subtitle-sync-jellyfin
     restart: "no"
     ports:
@@ -34,7 +37,7 @@ services:
       # would be created root-owned by the daemon on first `up`.
       #
       # Once the C# project lands, the flow is:
-      #   dotnet publish -c Release
+      #   dotnet publish -c Release -f net9.0      (net10.0 for Jellyfin 12)
       #   cp <publish-output>/*.dll jellyfin-plugin/docker/plugins/SubtitleSync/
       #   docker compose restart jellyfin
       #

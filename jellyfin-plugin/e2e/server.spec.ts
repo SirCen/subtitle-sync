@@ -9,6 +9,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   JELLYFIN_URL,
+  JELLYFIN_VERSION,
   MOVIE_NAME,
   adminSession,
   findFixtureItemId,
@@ -18,15 +19,18 @@ import {
 } from "./harness";
 
 test.describe("Jellyfin harness", () => {
-  test("server is up and running the pinned 10.11 line", async ({ request }) => {
+  test("server is up and running the pinned Jellyfin version", async ({ request }) => {
     const response = await request.get(`${JELLYFIN_URL}/System/Info/Public`);
     expect(response.ok()).toBe(true);
 
     const info = await response.json();
 
-    // Pinned deliberately. `latest` on Docker Hub currently points at the 12.0
-    // pre-release line, and this plugin targets 10.11.
-    expect(info.Version).toMatch(/^10\.11\./);
+    // Pinned deliberately (JELLYFIN_VERSION, never `latest`): the plugin ships
+    // one build per server line, and the specs must be running against the line
+    // whose build was staged. A tag of "12.1" serves Version "12.1.0", so compare
+    // only as many parts as the tag spells out.
+    const pinned = JELLYFIN_VERSION.split(".");
+    expect(String(info.Version).split(".").slice(0, pinned.length)).toEqual(pinned);
 
     // The scripted wizard ran, so nobody has to click through setup.
     expect(info.StartupWizardCompleted).toBe(true);

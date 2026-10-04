@@ -1,0 +1,33 @@
+<Project>
+
+  <!--
+    One build per Jellyfin server line, from the same source.
+
+    The two lines run on different runtimes and ship different server
+    assemblies, so the plugin is built once against each and released as two
+    zips with two repository manifest entries (see .github/workflows/release.yml):
+
+      net9.0  -> Jellyfin 10.11 (Jellyfin.Server.csproj at v10.11.11 is net9.0)
+      net10.0 -> Jellyfin 12    (Jellyfin.Server.csproj at v12.0 is net10.0)
+
+    The package versions are the OLDEST server each build supports, never the
+    newest. A plugin compiled against 12.1 could bind to a member 12.0 does not
+    have, and the 12 build is published with targetAbi 12.0.0.0. Raise these
+    only together with the targetAbi values in release.yml.
+
+    Lives here rather than in either csproj so the plugin and its tests cannot
+    drift onto different server versions for the same target framework.
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net9.0'">
+    <JellyfinPackageVersion>10.11.11</JellyfinPackageVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <JellyfinPackageVersion>12.0.0</JellyfinPackageVersion>
+  </PropertyGroup>
+
+</Project>

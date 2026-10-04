@@ -1,6 +1,9 @@
 {
   "_comment": "Single source of truth for the harness's knobs. Read by the Node scripts in scripts/*.mjs and by the Playwright specs in ../e2e/*.ts. It is JSON rather than a shared module because those two run under different loaders: Playwright transpiles .ts through its own pipeline and cannot import an ESM .mjs from this CommonJS package. Every value can be overridden by the matching env var listed below.",
 
+  "_jellyfinVersionComment": "The jellyfin/jellyfin image tag the harness runs. 10.11.11 exercises the net9.0 build; 12.1 the net10.0 one, which is what has to be staged in plugins/SubtitleSync. Purge the server (npm run jf:down -- --purge) before switching: Jellyfin cannot migrate its database back down.",
+  "jellyfinVersion": "10.11.11",
+
   "port": 8096,
   "adminUsername": "harness",
   "adminPassword": "harness-password",
@@ -19,6 +22,7 @@
   "containerMediaRoot": "/media/movies",
 
   "_env": {
+    "JELLYFIN_VERSION": "jellyfinVersion",
     "JELLYFIN_PORT": "port",
     "JELLYFIN_URL": "overrides the whole base URL, default http://127.0.0.1:<port>",
     "JELLYFIN_ADMIN_USER": "adminUsername",

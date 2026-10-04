@@ -65,13 +65,15 @@ jobs:
 
       - uses: actions/setup-dotnet@v5
         with:
-          # 9.0.x, not 10: the plugin targets net9.0 because that is what
-          # Jellyfin 10.11 runs on, and Jellyfin.Plugin.SubtitleSync.sln is a
-          # classic `.sln` (not the `.slnx` SDK 10 defaults to) so that a 9.0.1xx
-          # SDK can still open it. Do not "modernise" either half of that.
-          # ubuntu-latest already ships a 9.0.3xx SDK; this pins it so an image
-          # refresh cannot quietly move us off .NET 9.
-          dotnet-version: 9.0.x
+          # Both. The plugin multi-targets (jellyfin-plugin/Directory.Build.props):
+          # net9.0 against Jellyfin 10.11 and net10.0 against Jellyfin 12, and
+          # the net10.0 leg needs the 10 SDK to compile at all. The 9.0 install
+          # gives the net9.0 test leg its own runtime, so the 10.11 build is
+          # tested on the runtime 10.11 actually ships rather than rolled
+          # forward onto 10.
+          dotnet-version: |
+            9.0.x
+            10.0.x
 
       # Node is load-bearing for the *C#* build: the csproj's BuildWebBundle
       # target shells out to `node jellyfin-plugin/web/build.mjs` to produce the
@@ -102,5 +104,7 @@ jobs:
 
       - name: Tests
         # Release, --no-build: exercise the exact assemblies built above rather
-        # than triggering a second Debug build.
+        # than triggering a second Debug build. Runs the suite twice, once per
+        # target framework, so both the Jellyfin 10.11 and the Jellyfin 12
+        # build are covered.
         run: dotnet test -c Release --no-build

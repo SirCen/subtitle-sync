@@ -22,6 +22,21 @@ const raw = JSON.parse(
 
 export const JELLYFIN_PORT = process.env.JELLYFIN_PORT ?? String(raw.port);
 
+/**
+ * The Jellyfin server the harness runs, spelled as a jellyfin/jellyfin image
+ * tag: "10.11.11" by default, "12.1" to run the same suite against Jellyfin 12.
+ * docker-compose.yml reads it from the environment, which setup.mjs passes on.
+ *
+ * Switching lines on an existing server needs `npm run jf:down -- --purge`
+ * first: Jellyfin migrates its database forward on start and cannot go back.
+ */
+export const JELLYFIN_VERSION = process.env.JELLYFIN_VERSION || raw.jellyfinVersion;
+
+/** The same version spelled as a plugin targetAbi: always four numeric parts. */
+export const JELLYFIN_TARGET_ABI = [...JELLYFIN_VERSION.split("."), "0", "0", "0"]
+  .slice(0, 4)
+  .join(".");
+
 export const JELLYFIN_URL =
   process.env.JELLYFIN_URL ?? `http://127.0.0.1:${JELLYFIN_PORT}`;
 

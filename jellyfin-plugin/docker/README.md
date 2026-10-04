@@ -1,7 +1,9 @@
 # Local Jellyfin harness
 
-A throwaway Jellyfin 10.11 server with a seeded one-movie library, so the plugin
-can be smoke tested inside a real web client. Issue #19.
+A throwaway Jellyfin server (10.11.11 by default, or Jellyfin 12 - see
+[Running against Jellyfin 12](#running-against-jellyfin-12)) with a seeded
+one-movie library, so the plugin can be smoke tested inside a real web client.
+Issue #19.
 
 The plugin's riskiest behaviour - the Subtitles-menu injection (#13) and the
 Dashboard config page - only exists in a running client. Unit tests cannot see
@@ -42,7 +44,7 @@ npm run jf:ft:status     # what the running server actually has loaded
 
 | | |
 | --- | --- |
-| Image | `jellyfin/jellyfin:10.11.11` |
+| Image | `jellyfin/jellyfin:10.11.11` (`JELLYFIN_VERSION` to change) |
 | URL | `http://127.0.0.1:8096` (`JELLYFIN_PORT` to change) |
 | Admin | `harness` / `harness-password` |
 | Non-admin | `viewer` / `viewer-password`, holds `EnableSubtitleManagement` |
@@ -66,11 +68,41 @@ They are still not an administrator, which is the point: the 10.11 client puts
 plugin configuration pages behind an admin route guard, so this user could not
 open the sync page even though the server would let them analyse. See #12.
 
-### Why the tag is pinned to 10.11.11
+### Why the tag is pinned
 
-`jellyfin/jellyfin:latest` currently points at the **12.0 pre-release line**,
-which is not what this plugin targets. `10.11.11` is the newest release on the
-10.11 line on Docker Hub. Do not loosen this to `latest` or `10`.
+The plugin ships **one build per server line** - `net9.0` against the 10.11
+packages and `net10.0` against the Jellyfin 12 ones - and the build staged in
+`plugins/SubtitleSync/` has to match the server it is dropped into. A floating
+tag would let the server move under a staged build. `10.11.11` is the default;
+do not loosen it to `latest` or `10`.
+
+### Running against Jellyfin 12
+
+The version lives in `harness.config.json` as `jellyfinVersion`, overridable by
+the `JELLYFIN_VERSION` env var, and is spelled as a `jellyfin/jellyfin` image
+tag. Everything downstream follows it: the compose image, the File
+Transformation build `npm run jf:ft` fetches (3.0.x for 12), and the version
+`server.spec.ts` asserts.
+
+```bash
+npm run jf:down -- --purge                 # required when switching lines, see below
+
+cd jellyfin-plugin
+dotnet publish Jellyfin.Plugin.SubtitleSync/Jellyfin.Plugin.SubtitleSync.csproj \
+  -c Release -f net10.0 -o out/net10.0     # the Jellyfin 12 build
+cp out/net10.0/*.dll docker/plugins/SubtitleSync/
+cd ..
+
+JELLYFIN_VERSION=12.1 npm run jf:e2e
+```
+
+Purge when switching in either direction. Jellyfin migrates its database
+forward on start and cannot open it again on an older server, and the plugin
+directory it migrated the previous build into lives in the same volume.
+
+Raw `docker compose up` does not read `harness.config.json`. Export
+`JELLYFIN_VERSION` in that shell too, or compose recreates the container on
+10.11.11. `restart` is safe either way: it does not recreate the container.
 
 ### Where the media comes from
 
@@ -173,7 +205,7 @@ against a server with nothing staged.
 The loop is:
 
 ```bash
-dotnet publish -c Release                       # from the plugin project
+dotnet publish -c Release -f net9.0             # from the plugin project; net10.0 for Jellyfin 12
 cp <publish-output>/*.dll jellyfin-plugin/docker/plugins/SubtitleSync/
 docker compose -f jellyfin-plugin/docker/docker-compose.yml restart jellyfin
 ```
@@ -224,8 +256,8 @@ wrong route for a harness. The manifest publishes **six entries all numbered
 asking for "version 2.5.11.0" does not say which one you get. It also needs
 `iamparadox.dev` reachable from inside the container at the moment the test runs.
 
-`scripts/file-transformation.mjs` instead pins the asset for
-`targetAbi 10.11.11.0` - the tag `docker-compose.yml` runs - checks the MD5 the
+`scripts/file-transformation.mjs` instead pins the asset for the `targetAbi`
+of the tag `docker-compose.yml` runs (`10.11.11.0` by default), checks the MD5 the
 manifest publishes, and unpacks it into `plugins/FileTransformation/`, which is
 bind-mounted into the container. One version, one checksum, reproducible.
 
@@ -271,7 +303,7 @@ Specs live in `jellyfin-plugin/e2e/`. Run with `npm run jf:e2e`.
 
 **Passing today** (`server.spec.ts`) - the harness proving itself:
 
-- server is up and running the pinned 10.11 line
+- server is up and running the pinned Jellyfin version
 - admin can log in through the web client
 - fixture item detail page is reachable
 - fixture item has the external SRT as a subtitle track

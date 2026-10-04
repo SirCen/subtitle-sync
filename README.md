@@ -44,7 +44,7 @@ golden parity test (see [Testing](#testing)).
 
 ## Jellyfin plugin
 
-The same algorithm also ships as a **Jellyfin 10.11 plugin**, so you can re-time
+The same algorithm also ships as a **Jellyfin plugin** (10.11 and 12), so you can re-time
 a track from inside your own server instead of downloading the video first. It
 analyses the audio of a film or episode in your browser and writes a corrected
 `<base>.<lang>.synced.srt` beside the media file; the original is left alone.

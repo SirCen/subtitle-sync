@@ -24,22 +24,36 @@
 //   node jellyfin-plugin/web/build.mjs            production bundle (minified)
 //   node jellyfin-plugin/web/build.mjs --dev      unminified + inline sourcemap
 //   node jellyfin-plugin/web/build.mjs --watch    rebuild on change (implies --dev)
+//   node jellyfin-plugin/web/build.mjs --outdir=<dir>
+//                                                 write to <dir> instead of web/dist
+//
+// --outdir exists for the csproj. The plugin is built once per Jellyfin line
+// (net9.0 and net10.0), and those inner builds can run in parallel; two esbuild
+// runs writing the same web/dist while the other side embeds it would race. Each
+// target framework therefore bundles into its own obj/ directory.
 
 import { createRequire } from "node:module";
 import { mkdir, readFile, writeFile, stat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..", "..");
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
 const watch = args.has("--watch");
 const dev = watch || args.has("--dev");
 
+const OUTDIR_FLAG = "--outdir=";
+const outDirArg = argv.find((a) => a.startsWith(OUTDIR_FLAG));
+const outDir = outDirArg
+  ? resolve(outDirArg.slice(OUTDIR_FLAG.length))
+  : resolve(here, "dist");
+
 const ENTRY = resolve(here, "src", "index.ts");
-const OUTFILE = resolve(here, "dist", "subtitleSync.js");
+const OUTFILE = resolve(outDir, "subtitleSync.js");
 
 // The sync page UI (#12). A SECOND bundle on purpose: it reaches the algorithm
 // through `window.SubtitleSync`, which the bundle above defines, so lib/ and the
@@ -47,7 +61,7 @@ const OUTFILE = resolve(here, "dist", "subtitleSync.js");
 // duplicated into the page. It is also what keeps the page replaceable without
 // rebuilding the shared bundle.
 const PAGE_ENTRY = resolve(here, "src", "page", "main.ts");
-const PAGE_OUTFILE = resolve(here, "dist", "subtitleSyncPage.js");
+const PAGE_OUTFILE = resolve(outDir, "subtitleSyncPage.js");
 
 // The Subtitles-menu injection (#13). A THIRD bundle, and the odd one out: it is
 // not served over HTTP at all. It is inlined verbatim into /web/index.html by
@@ -55,7 +69,7 @@ const PAGE_OUTFILE = resolve(here, "dist", "subtitleSyncPage.js");
 // script that depends on nothing else having loaded - not window.SubtitleSync,
 // not the page bundle, not even document.body.
 const INJECT_ENTRY = resolve(here, "src", "inject.ts");
-const INJECT_OUTFILE = resolve(here, "dist", "subtitleSyncInject.js");
+const INJECT_OUTFILE = resolve(outDir, "subtitleSyncInject.js");
 const FVAD_SHIM = resolve(here, "src", "fvadWasm.ts");
 const FFMPEG_STUB = resolve(here, "src", "ffmpegUnavailable.ts");
 
@@ -351,7 +365,7 @@ const builds = [
 await mkdir(dirname(OUTFILE), { recursive: true });
 
 function report(outfile, size) {
-  const rel = outfile.slice(repoRoot.length + 1).replace(/\\/g, "/");
+  const rel = relative(repoRoot, outfile).replace(/\\/g, "/");
   console.log(
     `[subtitle-sync] ${rel}  ${(size / 1024).toFixed(1)} KB${dev ? "  (dev)" : ""}`,
   );

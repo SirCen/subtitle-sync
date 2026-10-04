@@ -14,6 +14,9 @@ import { expect, type Page } from "@playwright/test";
 import config from "../docker/harness.config.json";
 
 export const JELLYFIN_PORT = process.env.JELLYFIN_PORT ?? String(config.port);
+
+/** The image tag the harness runs, as docker/scripts/config.mjs resolves it. */
+export const JELLYFIN_VERSION = process.env.JELLYFIN_VERSION || config.jellyfinVersion;
 export const JELLYFIN_URL =
   process.env.JELLYFIN_URL ?? `http://127.0.0.1:${JELLYFIN_PORT}`;
 

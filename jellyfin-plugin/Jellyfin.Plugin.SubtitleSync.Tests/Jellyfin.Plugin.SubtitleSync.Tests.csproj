@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>false</ImplicitUsings>
     <IsPackable>false</IsPackable>
@@ -9,9 +8,13 @@
     <WarningsNotAsErrors>NU1902;NU1903</WarningsNotAsErrors>
 
     <!--
-      Targets net9.0 to match the plugin, but the test host has to be able to run
-      on whatever shared runtime the developer or CI box has. Without this, a
-      machine with only the .NET 10 runtime installed fails at `dotnet test` with
+      TargetFrameworks come from ../Directory.Build.props, so the whole suite
+      runs once against each plugin build: net9.0 with the Jellyfin 10.11
+      packages and net10.0 with the Jellyfin 12 ones.
+
+      RollForward because the test host has to be able to run on whatever shared
+      runtime the developer or CI box has. Without this, a machine with only the
+      .NET 10 runtime installed fails the net9.0 leg of `dotnet test` with
       "You must install .NET 9.0".
     -->
     <RollForward>Major</RollForward>
@@ -33,8 +36,8 @@
       here transitively either, and loading the Plugin type would throw. Referenced
       again without the exclusion so the test host has them on disk.
     -->
-    <PackageReference Include="Jellyfin.Controller" Version="10.11.11" />
-    <PackageReference Include="Jellyfin.Model" Version="10.11.11" />
+    <PackageReference Include="Jellyfin.Controller" Version="$(JellyfinPackageVersion)" />
+    <PackageReference Include="Jellyfin.Model" Version="$(JellyfinPackageVersion)" />
 
     <!--
       Same story as above, for the same reason. The plugin project excludes

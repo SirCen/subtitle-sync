@@ -33,7 +33,7 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 
-import { DOCKER_DIR, JELLYFIN_URL, authHeader } from "./config.mjs";
+import { DOCKER_DIR, JELLYFIN_TARGET_ABI, JELLYFIN_URL, authHeader } from "./config.mjs";
 
 /**
  * The plugin's id, from its own FileTransformationPlugin.cs. Also what our
@@ -45,11 +45,12 @@ export const FILE_TRANSFORMATION_GUID = "5e87cc92-571a-4d8d-8d98-d2d4147f9f90";
 const MANIFEST_URL = "https://www.iamparadox.dev/jellyfin/plugins/manifest.json";
 
 /**
- * The Jellyfin release the harness pins (docker-compose.yml). The manifest
- * publishes one asset per Jellyfin patch release under the same version number,
- * so this - not the version - is what selects the download.
+ * The Jellyfin release the harness runs (JELLYFIN_VERSION, see config.mjs). The
+ * manifest publishes one asset per Jellyfin release under the same version
+ * number, so this - not the version - is what selects the download. Its
+ * entries are newest first, so the first match is the newest build for it.
  */
-const TARGET_ABI = "10.11.11.0";
+const TARGET_ABI = JELLYFIN_TARGET_ABI;
 
 /**
  * Bind-mounted at /config/plugins/FileTransformation. Gitignored: the zip is
@@ -102,7 +103,7 @@ async function findRelease() {
     throw new Error(
       `No ${pkg.name} build for targetAbi ${TARGET_ABI}. Published ABIs: ${abis}. ` +
         "Either the plugin has not caught up with this Jellyfin release or the " +
-        "harness has moved on from 10.11.11.",
+        `harness has moved on from ${TARGET_ABI}.`,
     );
   }
 
@@ -243,8 +244,13 @@ export function isInstalled() {
 export async function install({ log = console.log } = {}) {
   if (isInstalled()) {
     const stamp = JSON.parse(fs.readFileSync(STAMP, "utf8"));
-    log(`File Transformation ${stamp.version} (${stamp.targetAbi}): already staged`);
-    return { changed: false, ...stamp };
+    if (stamp.targetAbi === TARGET_ABI) {
+      log(`File Transformation ${stamp.version} (${stamp.targetAbi}): already staged`);
+      return { changed: false, ...stamp };
+    }
+    // Staged for a different Jellyfin line (JELLYFIN_VERSION changed). Fall
+    // through: the staging directory is emptied before the new build lands.
+    log(`File Transformation is staged for ${stamp.targetAbi}, not ${TARGET_ABI}: replacing it`);
   }
 
   const release = await findRelease();

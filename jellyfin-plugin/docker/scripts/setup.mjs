@@ -14,6 +14,7 @@ import {
   CONTAINER_MEDIA_ROOT,
   DOCKER_DIR,
   JELLYFIN_URL,
+  JELLYFIN_VERSION,
   LIBRARY_NAME,
   MOVIE_NAME,
   SYNCABLE_KNOWN_OFFSET,
@@ -37,6 +38,8 @@ function compose(...args) {
   execFileSync("docker", ["compose", ...args], {
     cwd: DOCKER_DIR,
     stdio: "inherit",
+    // docker-compose.yml picks the image tag from this.
+    env: { ...process.env, JELLYFIN_VERSION },
   });
 }
 
